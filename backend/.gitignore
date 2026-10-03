@@ -1,0 +1,36 @@
+# Environment Variables & Secrets (CRITICAL)
+.env
+.env.local
+*.pem
+*.key
+
+# Python Bytecode & Cache
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual Environments
+venv/
+.venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# FastAPI / Uvicorn Logs & Temp Files
+*.log
+logs/
+
+# Build & Package Outputs
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# IDE & System Files
+.DS_Store
+.vscode/
+.idea/

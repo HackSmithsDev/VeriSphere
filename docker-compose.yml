@@ -1,0 +1,41 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: backend
+    restart: unless-stopped
+    ports:
+      - "8088:8088"
+    env_file:
+      - ./backend/.env
+    # 👇 Keeps container alive and mounts local code for live-reloading
+    tty: true 
+    volumes:
+      - ./backend:/app
+      - /app/venv/          # 💡 Prevents host environment from overwriting container virtual env
+    networks:
+      - aera-network
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: frontend
+    restart: unless-stopped
+    ports:
+      - "5176:5176"
+    depends_on:
+      - backend
+    # 👇 Mounts frontend code and protects container's node_modules
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules/  # 💡 Prevents host node_modules from overwriting container modules
+    networks:
+      - aera-network
+
+networks:
+  aera-network:
+    driver: bridge

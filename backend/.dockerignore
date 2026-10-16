@@ -1,0 +1,35 @@
+# Python / FastAPI specifics
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+.venv/
+env/
+venv/
+ENV/
+
+# Testing & logs
+.pytest_cache/
+.coverage
+htmlcov/
+*.log
+
+# Environment & IDEs
+.env
+.env.*
+!.env.example
+.vscode/
+.idea/
+.DS_Store

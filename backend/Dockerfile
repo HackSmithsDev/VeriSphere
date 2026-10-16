@@ -32,7 +32,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Create a non-root system user for secure container execution
 RUN groupadd -g 1001 aera && \
-    useradd -u 1001 -g aera -s /bin/bash -m aera
+    useradd -u 1001 -g aera -s /bin/bash -m aera && \
+    mkdir -p /app/data && \
+    chown -R aera:aera /app/data
 
 # Copy compiled Python packages from the builder stage
 COPY --from=builder /root/.local /home/aera/.local
@@ -54,5 +56,5 @@ EXPOSE 8088
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD curl -f http://localhost:8088/docs || exit 1
 
-# Launch production server with Uvicorn
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8088", "--proxy-headers", "--forwarded-allow-ips=*"]
+# Launch the configured server entry point
+CMD ["python", "main.py"]

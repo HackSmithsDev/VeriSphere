@@ -1,16 +1,16 @@
-# React + Vite
+# VeriSphere frontend
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+The frontend is a responsive React application built with Vite. It serves the public landing and registration experience, student learning-path screens, and role-specific faculty and administrator workspaces.
 
-Currently, two official plugins are available:
+## Development
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+```sh
+npm ci
+npm run dev
+```
 
-## React Compiler
+The Vite server listens on port 5176 and proxies API calls to `http://127.0.0.1:8088`. Start the backend separately; see the repository [README](../README.md).
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## Production container
 
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+`npm run build` creates the static application. The Nginx image serves it on port 5176, proxies `/api` and `/health` to the Compose backend, and falls back to `index.html` for the client-side app.

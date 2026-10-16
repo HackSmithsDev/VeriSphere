@@ -1,5 +1,4 @@
 // aera-web/src/components/common/ErrorState.jsx
-import React from "react";
 import { AlertTriangle, RefreshCw } from "lucide-react";
 
 export default function ErrorState({

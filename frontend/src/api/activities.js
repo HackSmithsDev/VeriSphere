@@ -1,6 +1,7 @@
 import { request } from './axios'
+import { getApiBase } from './base'
 
-const API_BASE = (import.meta.env.VITE_API_URL || '/api/v1').replace(/\/$/, '')
+const API_BASE = getApiBase()
 
 export const uploadEvidence = async (token, file) => {
   const body = new FormData()

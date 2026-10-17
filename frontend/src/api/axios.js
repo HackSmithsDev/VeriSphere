@@ -1,4 +1,6 @@
-const API_BASE = (import.meta.env.VITE_API_URL || '/api/v1').replace(/\/$/, '')
+import { getApiBase } from './base'
+
+const API_BASE = getApiBase()
 
 export async function request(path, { token, method = 'GET', body } = {}) {
   const headers = new Headers({ Accept: 'application/json' })

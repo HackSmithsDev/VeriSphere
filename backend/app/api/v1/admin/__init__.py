@@ -1,11 +1,13 @@
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.dependencies import require_roles
 from app.core.security import hash_password
-from app.db.models.academic import Course
+from app.db.models.academic import Course, Subject
+from app.db.models.activity import ActivityStatus, StudentActivity
 from app.db.models.milestone import MilestoneStatus, StudentMilestone
+from app.db.models.records import AssessmentMark, AttendanceRecord, AttendanceStatus
 from app.db.models.user import StudentProfile, TeacherProfile, User, UserRole
 from app.db.session import get_db
 from app.schemas.academic import CourseCreate, TeacherCreate
@@ -27,6 +29,11 @@ async def overview(
             StudentMilestone.status == MilestoneStatus.PENDING_VERIFICATION
         )
     )
+    activity_reviews = await db.scalar(
+        select(func.count(StudentActivity.id)).where(
+            StudentActivity.status == ActivityStatus.PENDING_VERIFICATION
+        )
+    )
     courses = await db.scalar(select(func.count(Course.id)))
     return {
         "stats": {
@@ -34,6 +41,7 @@ async def overview(
             "students": students or 0,
             "teachers": teachers or 0,
             "pending_reviews": reviews or 0,
+            "pending_activity_reviews": activity_reviews or 0,
             "courses": courses or 0,
         }
     }
@@ -92,3 +100,129 @@ async def create_teacher(
     db.add(user)
     await db.flush()
     return {"id": user.id, "email": user.email, "role": user.role.value}
+
+
+@router.get("/reports/activities")
+async def activity_report(
+    _: User = Depends(admin_only), db: AsyncSession = Depends(get_db)
+) -> dict:
+    total = await db.scalar(select(func.count(StudentActivity.id))) or 0
+    verified = (
+        await db.scalar(
+            select(func.count(StudentActivity.id)).where(
+                StudentActivity.status == ActivityStatus.VERIFIED
+            )
+        )
+        or 0
+    )
+    pending = (
+        await db.scalar(
+            select(func.count(StudentActivity.id)).where(
+                StudentActivity.status == ActivityStatus.PENDING_VERIFICATION
+            )
+        )
+        or 0
+    )
+    by_category = await db.execute(
+        select(StudentActivity.category, func.count(StudentActivity.id))
+        .group_by(StudentActivity.category)
+        .order_by(StudentActivity.category)
+    )
+    by_status = await db.execute(
+        select(StudentActivity.status, func.count(StudentActivity.id))
+        .group_by(StudentActivity.status)
+        .order_by(StudentActivity.status)
+    )
+    return {
+        "total_activities": total,
+        "verified_activities": verified,
+        "pending_verification": pending,
+        "needs_revision": total - verified - pending,
+        "by_category": [
+            {"category": category.value, "count": count}
+            for category, count in by_category
+        ],
+        "by_status": [
+            {"status": state.value, "count": count} for state, count in by_status
+        ],
+    }
+
+
+@router.get("/reports/academics")
+async def academic_report(
+    _: User = Depends(admin_only), db: AsyncSession = Depends(get_db)
+) -> dict:
+    attendance_rows = await db.execute(
+        select(
+            Course.name,
+            Subject.code,
+            Subject.name,
+            func.count(AttendanceRecord.id),
+            func.sum(
+                case(
+                    (AttendanceRecord.status == AttendanceStatus.PRESENT, 1),
+                    else_=0,
+                )
+            ),
+            func.sum(
+                case(
+                    (AttendanceRecord.status == AttendanceStatus.ABSENT, 1),
+                    else_=0,
+                )
+            ),
+            func.sum(
+                case(
+                    (AttendanceRecord.status == AttendanceStatus.EXCUSED, 1),
+                    else_=0,
+                )
+            ),
+        )
+        .join(Subject, Subject.course_id == Course.id)
+        .outerjoin(AttendanceRecord, AttendanceRecord.subject_id == Subject.id)
+        .group_by(Course.name, Subject.id, Subject.code, Subject.name)
+        .order_by(Course.name, Subject.semester, Subject.name)
+    )
+    mark_rows = await db.execute(
+        select(
+            Course.name,
+            Subject.code,
+            Subject.name,
+            func.count(AssessmentMark.id),
+            func.avg(AssessmentMark.score * 100 / AssessmentMark.maximum_score),
+        )
+        .join(Subject, Subject.course_id == Course.id)
+        .outerjoin(AssessmentMark, AssessmentMark.subject_id == Subject.id)
+        .group_by(Course.name, Subject.id, Subject.code, Subject.name)
+        .order_by(Course.name, Subject.semester, Subject.name)
+    )
+    attendance = [
+        {
+            "course": course,
+            "subject_code": code,
+            "subject": name,
+            "sessions_recorded": sessions,
+            "present": present or 0,
+            "absent": absent or 0,
+            "excused": excused or 0,
+            "attendance_percentage": round((present or 0) * 100 / (sessions - (excused or 0)), 1)
+            if sessions > (excused or 0)
+            else None,
+        }
+        for course, code, name, sessions, present, absent, excused in attendance_rows
+    ]
+    assessments = [
+        {
+            "course": course,
+            "subject_code": code,
+            "subject": name,
+            "assessments_recorded": count,
+            "average_percentage": round(float(average), 1) if average is not None else None,
+        }
+        for course, code, name, count, average in mark_rows
+    ]
+    return {
+        "attendance": attendance,
+        "assessments": assessments,
+        "students": await db.scalar(select(func.count(StudentProfile.id))) or 0,
+        "subjects": await db.scalar(select(func.count(Subject.id))) or 0,
+    }

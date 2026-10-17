@@ -2,6 +2,13 @@
 from app.db.models.user import User, UserRole, StudentProfile, TeacherProfile
 from app.db.models.academic import Course, Subject, Chapter
 from app.db.models.milestone import StudentMilestone, MilestoneStatus
+from app.db.models.activity import ActivityCategory, ActivityStatus, StudentActivity
+from app.db.models.records import (
+    AssessmentMark,
+    AttendanceRecord,
+    AttendanceStatus,
+    EvidenceFile,
+)
 
 
 __all__ = [
@@ -14,4 +21,11 @@ __all__ = [
     "Chapter",
     "StudentMilestone",
     "MilestoneStatus",
+    "ActivityCategory",
+    "ActivityStatus",
+    "StudentActivity",
+    "AssessmentMark",
+    "AttendanceRecord",
+    "AttendanceStatus",
+    "EvidenceFile",
 ]

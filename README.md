@@ -1,6 +1,8 @@
 # VeriSphere
 
-VeriSphere is an academic progress and evidence-verification portal. Students follow curriculum milestones and submit evidence; faculty review that work; administrators provision faculty and monitor campus activity.
+VeriSphere is a web-based academic progress and student achievement platform aligned with Smart India Hackathon 2025 problem statement SIH25093. It brings curriculum milestones and co-curricular achievements into one evidence-backed record: students submit proof, faculty verify it, and students can share a portfolio containing only verified items. Administrators can review campus activity and export achievement summaries.
+
+The product is intentionally web-only; this repository does not include a React Native or other native mobile app.
 
 ## Run with Docker
 
@@ -45,13 +47,27 @@ npm run dev
 ```
 
 The Vite development server proxies `/api` and `/health` to the API on port 8088. The API uses `sqlite+aiosqlite:///./verisphere.db` by default and creates the initial schema and sample curriculum on startup. Set `DATABASE_URL` to use another supported database. Alembic migrations are available under `backend/alembic`.
+Before upgrading an existing database, run `cd backend && python3 -m alembic upgrade head` with the same `DATABASE_URL` used by the application.
 
 ## Main flows
 
 - Student registration, sign-in, curriculum milestone tracking, evidence submission, and progress overview.
 - Role-protected faculty review with verification or revision feedback; verification unlocks the next milestone.
+- Student submission of certifications, courses/MOOCs, seminars, internships, projects, club work, volunteering, leadership, competitions, and community service, with an evidence URL and staff verification.
+- Evidence attachment as a PDF, PNG, or JPEG (up to 10 MB), stored privately and made available only to its student, authorized reviewers, or anyone with an explicitly enabled share link for verified portfolio evidence.
+- Teacher/admin entry of subject-level attendance and continuous assessment marks; students can review their own records and attendance percentages.
+- A student-controlled public portfolio link containing verified academic milestones and verified activities only. Students can revoke the link; the public portfolio can be printed or saved as a PDF from the browser.
+- Administrator activity and academic summaries by category, status, and subject, downloadable as CSV for internal reporting and accreditation preparation.
 - Student learning guidance and faculty feedback suggestions through the AI assistant, using configured Groq and/or Gemini providers.
 - Administrator overview and account directory, plus faculty account provisioning.
 - Public course and announcement endpoints.
+
+## SIH25093 scope notes
+
+The web application implements the central verified-record workflow, student-submitted evidence links and files, staff review, verified portfolio sharing, attendance and assessment recording, and institutional summary reporting. Reports are general summaries for internal and accreditation preparation; they are not official NAAC, AICTE, or NIRF report templates.
+
+Attendance and assessment records are entered by faculty per student and subject; attendance is upserted once per date and subject. Uploaded files are limited to PDF, PNG, or JPEG and 10 MB per file. Share links expose only verified records and their evidence, and can be revoked.
+
+LMS/ERP synchronization and institution-specific accreditation templates are not currently implemented. External integrations require an institution-approved connector contract, credentials, and data-sharing rules; reports currently provide a generic CSV foundation rather than claiming official compliance. AI recommendations are advisory and do not make verification decisions.
 
 Authentication endpoints issue signed bearer tokens. Public registration is restricted to student accounts; teacher accounts are provisioned by an administrator and the initial administrator is configured through environment variables.

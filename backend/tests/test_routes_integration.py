@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.pool import StaticPool
 
 from app.api.router import router as api_router
+from app.api.v1 import evidence as evidence_api
 from app.core.security import create_access_token, hash_password
 from app.db.base import Base
 from app.db.models import Chapter, Course, StudentMilestone, Subject, TeacherProfile, User
@@ -16,10 +17,11 @@ from app.services.ai import advisor
 
 
 def test_routes_cover_student_teacher_admin_and_public_flows(
-    monkeypatch,
+    monkeypatch, tmp_path,
 ) -> None:
     monkeypatch.setattr(advisor, "GROQ_API_KEY", "")
     monkeypatch.setattr(advisor, "GEMINI_API_KEY", "")
+    monkeypatch.setattr(evidence_api, "UPLOAD_DIR", tmp_path)
 
     async def exercise_routes() -> None:
         engine = create_async_engine(
@@ -177,6 +179,28 @@ def test_routes_cover_student_teacher_admin_and_public_flows(
             second_milestone_id = milestones[1]["id"]
 
             response = await client.post(
+                "/api/v1/student/evidence",
+                headers=student_headers,
+                files={"file": ("proof.pdf", b"%PDF-1.4\nstudent proof", "application/pdf")},
+            )
+            assert response.status_code == 201
+            milestone_evidence_id = response.json()["id"]
+            response = await client.get(
+                f"/api/v1/student/evidence/{milestone_evidence_id}",
+                headers=student_headers,
+            )
+            assert response.status_code == 200
+            assert response.content.startswith(b"%PDF-")
+
+            response = await client.post(
+                "/api/v1/student/evidence",
+                headers=student_headers,
+                files={"file": ("malware.txt", b"not a PDF", "application/pdf")},
+            )
+            assert response.status_code == 415
+            assert len(list(tmp_path.iterdir())) == 1
+
+            response = await client.post(
                 f"/api/v1/student/milestones/{second_milestone_id}/submit",
                 headers=student_headers,
                 json={"summary": "I finished the locked chapter."},
@@ -186,7 +210,10 @@ def test_routes_cover_student_teacher_admin_and_public_flows(
             response = await client.post(
                 f"/api/v1/student/milestones/{first_milestone_id}/submit",
                 headers=student_headers,
-                json={"summary": "I completed the first programming exercise."},
+                json={
+                    "summary": "I completed the first programming exercise.",
+                    "evidence_file_id": milestone_evidence_id,
+                },
             )
             assert response.status_code == 200
             assert response.json()["status"] == MilestoneStatus.PENDING_VERIFICATION.value
@@ -218,6 +245,12 @@ def test_routes_cover_student_teacher_admin_and_public_flows(
             )
             assert response.status_code == 200
             assert response.json()[0]["id"] == first_milestone_id
+            assert response.json()[0]["evidence_file_id"] == milestone_evidence_id
+            response = await client.get(
+                f"/api/v1/student/evidence/{milestone_evidence_id}",
+                headers=teacher_headers,
+            )
+            assert response.status_code == 200
 
             response = await client.post(
                 f"/api/v1/teacher/submissions/{first_milestone_id}/review",
@@ -260,6 +293,231 @@ def test_routes_cover_student_teacher_admin_and_public_flows(
             assert response.status_code == 422
 
             admin_headers = {"Authorization": f"Bearer {tokens['admin']}"}
+            response = await client.get(
+                "/api/v1/teacher/academic-options",
+                headers=student_headers,
+            )
+            assert response.status_code == 403
+            response = await client.get(
+                "/api/v1/teacher/academic-options",
+                headers=teacher_headers,
+            )
+            assert response.status_code == 200
+            academic_options = response.json()
+            academic_student_id = academic_options["students"][0]["id"]
+            academic_subject_id = academic_options["subjects"][0]["id"]
+
+            attendance_entry = {
+                "student_id": academic_student_id,
+                "subject_id": academic_subject_id,
+                "attendance_date": "2026-09-01",
+                "status": "present",
+            }
+            response = await client.post(
+                "/api/v1/teacher/attendance",
+                headers=teacher_headers,
+                json=attendance_entry,
+            )
+            assert response.status_code == 200
+            attendance_entry["status"] = "absent"
+            response = await client.post(
+                "/api/v1/teacher/attendance",
+                headers=teacher_headers,
+                json=attendance_entry,
+            )
+            assert response.status_code == 200
+            response = await client.post(
+                "/api/v1/teacher/attendance",
+                headers=teacher_headers,
+                json={
+                    **attendance_entry,
+                    "attendance_date": "2026-09-02",
+                    "status": "present",
+                },
+            )
+            assert response.status_code == 200
+            response = await client.post(
+                "/api/v1/teacher/marks",
+                headers=teacher_headers,
+                json={
+                    "student_id": academic_student_id,
+                    "subject_id": academic_subject_id,
+                    "title": "Quiz 1",
+                    "score": 8,
+                    "maximum_score": 10,
+                    "assessment_date": "2026-09-02",
+                },
+            )
+            assert response.status_code == 200
+            response = await client.post(
+                "/api/v1/teacher/marks",
+                headers=teacher_headers,
+                json={
+                    "student_id": academic_student_id,
+                    "subject_id": academic_subject_id,
+                    "title": "Invalid quiz",
+                    "score": 11,
+                    "maximum_score": 10,
+                    "assessment_date": "2026-09-02",
+                },
+            )
+            assert response.status_code == 422
+            response = await client.get(
+                "/api/v1/student/academic-records",
+                headers=student_headers,
+            )
+            assert response.status_code == 200
+            assert response.json()["attendance"][0]["percentage"] == 50.0
+            assert response.json()["marks"][0]["percentage"] == 80.0
+            response = await client.get(
+                "/api/v1/admin/reports/academics",
+                headers=admin_headers,
+            )
+            assert response.status_code == 200
+            assert response.json()["attendance"][0]["attendance_percentage"] == 50.0
+            assert response.json()["assessments"][0]["average_percentage"] == 80.0
+
+            response = await client.post(
+                "/api/v1/student/activities",
+                headers=student_headers,
+                json={
+                    "category": "internship",
+                    "title": "Software engineering internship",
+                    "description": "Built and tested a small service during an internship.",
+                    "issuer": "Example Labs",
+                    "achieved_on": "2026-06-15",
+                },
+            )
+            assert response.status_code == 422
+
+            response = await client.post(
+                "/api/v1/student/evidence",
+                headers=student_headers,
+                files={"file": ("internship.exe", b"%PDF-1.7\ninternship proof", "application/pdf")},
+            )
+            assert response.status_code == 201
+            activity_evidence_id = response.json()["id"]
+            assert response.json()["filename"] == "internship.pdf"
+            stored_file = next(tmp_path.iterdir())
+            assert stored_file.stat().st_mode & 0o777 == 0o600
+            response = await client.post(
+                "/api/v1/student/activities",
+                headers=student_headers,
+                json={
+                    "category": "internship",
+                    "title": "Software engineering internship",
+                    "description": "Built and tested a small service during an internship.",
+                    "issuer": "Example Labs",
+                    "achieved_on": "2026-06-15",
+                    "evidence_file_id": activity_evidence_id,
+                },
+            )
+            assert response.status_code == 201
+            activity = response.json()
+            assert activity["status"] == "pending_verification"
+            response = await client.get(
+                f"/api/v1/student/evidence/{activity_evidence_id}",
+                headers=teacher_headers,
+            )
+            assert response.status_code == 200
+            assert response.headers["content-disposition"].endswith(
+                'filename="internship.pdf"'
+            )
+
+            response = await client.get(
+                "/api/v1/teacher/activities",
+                headers=student_headers,
+            )
+            assert response.status_code == 403
+            response = await client.get(
+                "/api/v1/student/portfolio",
+                headers=student_headers,
+            )
+            assert response.status_code == 200
+            assert response.json()["activities"] == []
+
+            response = await client.get(
+                "/api/v1/teacher/activities",
+                headers=teacher_headers,
+            )
+            assert response.status_code == 200
+            assert response.json()[0]["id"] == activity["id"]
+            response = await client.post(
+                f"/api/v1/teacher/activities/{activity['id']}/review",
+                headers=teacher_headers,
+                json={"decision": "verified", "feedback": "Evidence checked."},
+            )
+            assert response.status_code == 200
+            assert response.json()["status"] == "verified"
+            response = await client.put(
+                f"/api/v1/student/activities/{activity['id']}",
+                headers=student_headers,
+                json={
+                    "category": "internship",
+                    "title": "Changed verified title",
+                    "description": "Attempting to edit a verified achievement.",
+                    "proof_url": "https://example.com/proof",
+                },
+            )
+            assert response.status_code == 409
+
+            response = await client.get(
+                "/api/v1/student/portfolio",
+                headers=student_headers,
+            )
+            assert response.status_code == 200
+            assert response.json()["activities"][0]["title"] == (
+                "Software engineering internship"
+            )
+            assert response.json()["activities"][0]["evidence_file_id"] == activity_evidence_id
+            assert "email" not in response.json()["student"]
+            assert response.json()["academic_milestones"][0]["title"] == "Foundations"
+            assert response.json()["share_enabled"] is False
+            response = await client.post(
+                "/api/v1/student/portfolio/share",
+                headers=student_headers,
+            )
+            assert response.status_code == 200
+            share_path = response.json()["share_url"]
+            share_token = share_path.rsplit("/", 1)[-1]
+            response = await client.get(f"/api/v1/portfolios/{share_token}")
+            assert response.status_code == 200
+            assert response.json()["activities"][0]["title"] == (
+                "Software engineering internship"
+            )
+            response = await client.get(
+                f"/api/v1/student/evidence/shared/{share_token}/{activity_evidence_id}",
+            )
+            assert response.status_code == 200
+
+            response = await client.get(
+                "/api/v1/admin/reports/activities",
+                headers=admin_headers,
+            )
+            assert response.status_code == 200
+            assert response.json()["total_activities"] == 1
+            assert response.json()["verified_activities"] == 1
+            assert response.json()["by_category"] == [
+                {"category": "internship", "count": 1}
+            ]
+            response = await client.get(
+                "/api/v1/admin/reports/activities",
+                headers=teacher_headers,
+            )
+            assert response.status_code == 403
+
+            response = await client.delete(
+                "/api/v1/student/portfolio/share",
+                headers=student_headers,
+            )
+            assert response.status_code == 204
+            response = await client.get(f"/api/v1/portfolios/{share_token}")
+            assert response.status_code == 404
+            response = await client.get(
+                f"/api/v1/student/evidence/shared/{share_token}/{activity_evidence_id}",
+            )
+            assert response.status_code == 404
+
             response = await client.get(
                 "/api/v1/admin/overview",
                 headers=admin_headers,

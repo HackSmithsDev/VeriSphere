@@ -37,6 +37,9 @@ class StudentProfile(Base):
     biography: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     career_preferences: Mapped[dict] = mapped_column(JSON, default=dict)   # Targeted tech roles & industry tracks
     verified_hard_points: Mapped[dict] = mapped_column(JSON, default=dict)  # AI-compiled structured achievements
+    portfolio_share_token: Mapped[Optional[str]] = mapped_column(
+        String(64), unique=True, index=True, nullable=True
+    )
 
     user: Mapped["User"] = relationship(back_populates="student_profile")
     course: Mapped["Course"] = relationship(back_populates="students")

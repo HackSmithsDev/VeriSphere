@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react'
 import {
   ArrowDownRight,
   ArrowRight,
   ArrowUpRight,
+  Award,
   Bell,
   BookOpen,
   Check,
@@ -12,6 +13,8 @@ import {
   FileCheck2,
   FileText,
   GraduationCap,
+  ChartColumn,
+  Globe,
   LayoutDashboard,
   LogOut,
   Menu,
@@ -26,15 +29,24 @@ import { getAdminOverview, getAdminUsers, createTeacher } from './api/admin'
 import { AssistantChat } from './components/assistant/AssistantChat'
 import { getCurrentUser, login, logout, register } from './api/auth'
 import { getAnnouncements, getCourses } from './api/guest'
+import { uploadEvidence } from './api/activities'
 import { getStudentDashboard, getMilestones, submitMilestone } from './api/student'
 import { getTeacherDashboard, getSubmissions, reviewSubmission } from './api/teacher'
 import { ActionButton } from './components/ui/ActionButton'
+import {
+  ActivityReports,
+  ActivityWorkspace,
+  PortfolioWorkspace,
+  SharedPortfolioPage,
+} from './components/activities/ActivityWorkspaces'
+import { AcademicWorkspace } from './components/records/AcademicWorkspace'
+import { EvidenceLink } from './components/evidence/EvidenceLink'
 import { Badge } from './components/ui/Badge'
 import { Card } from './components/ui/Card'
-import HeroScene from './components/visual/HeroScene'
 import './App.css'
 
 const TOKEN_KEY = 'verisphere_token'
+const HeroScene = lazy(() => import('./components/visual/HeroScene'))
 
 async function loadWorkspace(token, role) {
   if (role === 'student') {
@@ -58,7 +70,7 @@ async function loadWorkspace(token, role) {
   return { dashboard, users }
 }
 
-function App() {
+function WorkspaceApp() {
   const [token, setToken] = useState(() => localStorage.getItem(TOKEN_KEY))
   const [user, setUser] = useState(null)
   const [workspace, setWorkspace] = useState({})
@@ -120,6 +132,8 @@ function App() {
       return [
         ['overview', 'Overview', LayoutDashboard],
         ['reviews', 'Review submissions', FileCheck2],
+        ['activity-reviews', 'Activity reviews', Award],
+        ['academic-records', 'Attendance & marks', ChartColumn],
         ['assistant', 'AI assistant', Sparkles],
         ['announcements', 'Announcements', Bell],
       ]
@@ -128,12 +142,17 @@ function App() {
       return [
         ['overview', 'Overview', LayoutDashboard],
         ['accounts', 'Accounts', Users],
+        ['activity-reviews', 'Activity reviews', Award],
+        ['reports', 'Activity reports', ChartColumn],
         ['announcements', 'Announcements', Bell],
       ]
     }
     return [
       ['overview', 'Overview', LayoutDashboard],
       ['learning', 'Learning path', BookOpen],
+      ['academic-records', 'Attendance & marks', ChartColumn],
+      ['activities', 'Achievements', Award],
+      ['portfolio', 'My portfolio', Globe],
       ['assistant', 'AI assistant', Sparkles],
       ['announcements', 'Announcements', Bell],
       ['profile', 'My profile', GraduationCap],
@@ -182,9 +201,23 @@ function App() {
     if (!activeMilestone) return
     const form = new FormData(event.currentTarget)
     try {
+      const proofUrl = form.get('proof_url')
+      const evidenceFile = form.get('evidence_file')
+      if (proofUrl && evidenceFile?.size) {
+        throw new Error('Choose either an evidence link or a file, not both.')
+      }
+      if (evidenceFile?.size > 10 * 1024 * 1024) {
+        throw new Error('Evidence files must be 10 MB or smaller.')
+      }
+      const evidenceFileId = evidenceFile?.size
+        ? (await uploadEvidence(token, evidenceFile)).id
+        : proofUrl
+          ? null
+          : activeMilestone.evidence_file_id || null
       await submitMilestone(token, activeMilestone.id, {
         summary: form.get('summary'),
-        proof_url: form.get('proof_url') || null,
+        proof_url: proofUrl || null,
+        evidence_file_id: evidenceFileId,
       })
       await refreshWorkspace(token, user.role)
       setActiveMilestone(null)
@@ -384,6 +417,7 @@ function App() {
               milestones={workspace.milestones || []}
               searchTerm={searchTerm}
               onSubmit={setActiveMilestone}
+              token={token}
             />
           )}
           {page === 'reviews' && (
@@ -391,8 +425,14 @@ function App() {
               submissions={workspace.submissions || []}
               searchTerm={searchTerm}
               onReview={approveSubmission}
+              token={token}
             />
           )}
+          {page === 'activities' && <ActivityWorkspace token={token} />}
+          {page === 'activity-reviews' && <ActivityWorkspace token={token} staff />}
+          {page === 'academic-records' && <AcademicWorkspace token={token} staff={user.role !== 'student'} />}
+          {page === 'portfolio' && <PortfolioWorkspace token={token} />}
+          {page === 'reports' && <ActivityReports token={token} />}
           {page === 'accounts' && (
             <Accounts
               users={workspace.users || []}
@@ -415,8 +455,9 @@ function App() {
             </div>
             <p className="muted modal-description">{activeMilestone.title} · {activeMilestone.subject}</p>
             <form className="auth-form" onSubmit={sendSubmission}>
-              <label>What did you complete?<textarea name="summary" rows="4" minLength="10" maxLength="4000" placeholder="Describe your work and what you learned…" required /></label>
-              <label>Link to evidence <span className="optional">(optional)</span><input name="proof_url" type="url" placeholder="https://…" maxLength="1000" /></label>
+              <label>What did you complete?<textarea name="summary" rows="4" minLength="10" maxLength="4000" placeholder="Describe your work and what you learned…" defaultValue={activeMilestone.submission?.summary || ''} required /></label>
+              <label>Link to evidence <span className="optional">(or attach a PDF, PNG, JPEG; max 10 MB)</span><input name="proof_url" type="url" placeholder="https://…" maxLength="1000" defaultValue={activeMilestone.submission?.proof_url || ''} /></label>
+              <label>Upload evidence file<input name="evidence_file" type="file" accept=".pdf,.png,.jpg,.jpeg,application/pdf,image/png,image/jpeg" /></label>
               <div className="modal-actions">
                 <button type="button" className="button button-quiet" onClick={() => setActiveMilestone(null)}>Cancel</button>
                 <button className="button button-primary" type="submit">Send for review <ArrowRight size={16} /></button>
@@ -427,6 +468,11 @@ function App() {
       )}
     </div>
   )
+}
+
+function App() {
+  const match = window.location.pathname.match(/^\/portfolio\/([A-Za-z0-9_-]+)\/?$/)
+  return match ? <SharedPortfolioPage shareToken={match[1]} /> : <WorkspaceApp />
 }
 
 function Landing({ onSignIn, onSignUp, error }) {
@@ -447,7 +493,9 @@ function Landing({ onSignIn, onSignUp, error }) {
           <div className="hero-proof"><div className="proof-avatars"><span>AR</span><span>SM</span><span>JK</span></div><span>Built around progress, not just grades</span></div>
         </div>
         <div className="hero-visual" aria-label="Learning dashboard preview">
-          <HeroScene />
+          <Suspense fallback={<div className="hero-scene-fallback" />}>
+            <HeroScene />
+          </Suspense>
           <div className="preview-card">
             <div className="preview-top"><div><span className="preview-label">YOUR LEARNING JOURNEY</span><strong>Semester overview</strong></div><span className="preview-menu">···</span></div>
             <div className="preview-chart"><div className="chart-ring"><div><strong>72%</strong><span>complete</span></div></div><div className="chart-legend"><span><i className="legend-dot purple" />Verified <b>18</b></span><span><i className="legend-dot orange" />In review <b>4</b></span><span><i className="legend-dot grey" />To explore <b>3</b></span></div></div>
@@ -481,14 +529,14 @@ function Overview({ user, fullName, workspace, onNavigate }) {
       ]
     : teacher
       ? [
-          { label: 'Needs your review', value: stats.pending_reviews ?? '—', icon: FileCheck2, tone: 'orange', hint: 'Student submissions' },
+        { label: 'Needs your review', value: (stats.pending_reviews ?? 0) + (stats.pending_activity_reviews ?? 0), icon: FileCheck2, tone: 'orange', hint: 'Milestones and achievements' },
           { label: 'Students supported', value: stats.students ?? '—', icon: Users, tone: 'purple', hint: 'Across your campus' },
           { label: 'Review queue', value: workspace.submissions?.length ?? '—', icon: Clock3, tone: 'green', hint: 'Ready for your feedback' },
         ]
       : [
           { label: 'Total accounts', value: stats.users ?? '—', icon: Users, tone: 'purple', hint: 'Across your campus' },
           { label: 'Student community', value: stats.students ?? '—', icon: GraduationCap, tone: 'green', hint: 'Enrolled learners' },
-          { label: 'Reviews pending', value: stats.pending_reviews ?? '—', icon: FileCheck2, tone: 'orange', hint: `${stats.teachers ?? 0} faculty accounts` },
+          { label: 'Reviews pending', value: (stats.pending_reviews ?? 0) + (stats.pending_activity_reviews ?? 0), icon: FileCheck2, tone: 'orange', hint: `${stats.teachers ?? 0} faculty accounts` },
         ]
 
   return (
@@ -529,16 +577,16 @@ function AdminSnapshot({ stats, onNavigate }) {
   return <div className="admin-snapshot"><div><span className="snapshot-value">{stats.courses ?? '—'}</span><span className="snapshot-label">courses</span></div><div><span className="snapshot-value">{stats.teachers ?? '—'}</span><span className="snapshot-label">faculty</span></div><div><span className="snapshot-value">{stats.students ?? '—'}</span><span className="snapshot-label">students</span></div><button className="button button-secondary button-full" onClick={() => onNavigate('accounts')}>Manage accounts <ArrowRight size={15} /></button></div>
 }
 
-function LearningPath({ milestones, searchTerm, onSubmit }) {
+function LearningPath({ milestones, searchTerm, onSubmit, token }) {
   const filtered = milestones.filter((item) => `${item.title} ${item.subject}`.toLowerCase().includes(searchTerm.toLowerCase()))
   return <section><div className="page-heading"><div><span className="eyebrow">YOUR CURRICULUM</span><h1>Learning path</h1><p className="muted">Build skills one verified milestone at a time.</p></div><span className="soft-chip"><BookOpen size={15} />{milestones.length} milestones</span></div>
-    {filtered.length ? <div className="milestone-list">{filtered.map((item, index) => <article className="milestone-card" key={item.id}><div className={`milestone-marker ${item.status}`}><span>{item.status === 'verified' ? <Check size={16} /> : String(index + 1).padStart(2, '0')}</span></div><div className="milestone-body"><div className="milestone-meta"><span>{item.subject_code} · SEMESTER {item.semester}</span><span className={`status-pill ${item.status === 'verified' ? 'status-verified' : item.status === 'pending_verification' ? 'status-pending' : item.status === 'locked' ? 'status-locked' : 'status-progress'}`}>{item.status.replaceAll('_', ' ')}</span></div><h2>{item.title}</h2><p>{item.description || 'A chance to show what you have learned.'}</p>{item.feedback && <div className="feedback-note"><strong>Faculty feedback</strong><span>{item.feedback}</span></div>}{item.submission && <div className="submission-summary"><FileText size={15} /><span>{item.submission.summary}</span>{item.submission.proof_url && <a href={item.submission.proof_url} target="_blank" rel="noreferrer">View evidence <ArrowUpRight size={13} /></a>}</div>}{item.status !== 'locked' && item.status !== 'verified' && item.status !== 'pending_verification' && <button className="button button-secondary milestone-action" onClick={() => onSubmit(item)}>{item.submission ? 'Resubmit evidence' : 'Submit evidence'} <ArrowRight size={15} /></button>}</div></article>)}</div> : <EmptyPanel icon={Search} title="No milestones found" text="Try another search term." />}</section>
+    {filtered.length ? <div className="milestone-list">{filtered.map((item, index) => <article className="milestone-card" key={item.id}><div className={`milestone-marker ${item.status}`}><span>{item.status === 'verified' ? <Check size={16} /> : String(index + 1).padStart(2, '0')}</span></div><div className="milestone-body"><div className="milestone-meta"><span>{item.subject_code} · SEMESTER {item.semester}</span><span className={`status-pill ${item.status === 'verified' ? 'status-verified' : item.status === 'pending_verification' ? 'status-pending' : item.status === 'locked' ? 'status-locked' : 'status-progress'}`}>{item.status.replaceAll('_', ' ')}</span></div><h2>{item.title}</h2><p>{item.description || 'A chance to show what you have learned.'}</p>{item.feedback && <div className="feedback-note"><strong>Faculty feedback</strong><span>{item.feedback}</span></div>}{item.submission && <div className="submission-summary"><FileText size={15} /><span>{item.submission.summary}</span>{item.submission.proof_url && <a href={item.submission.proof_url} target="_blank" rel="noreferrer">View evidence <ArrowUpRight size={13} /></a>}{item.evidence_file_id && <EvidenceLink token={token} evidenceId={item.evidence_file_id} />}</div>}{item.status !== 'locked' && item.status !== 'verified' && item.status !== 'pending_verification' && <button className="button button-secondary milestone-action" onClick={() => onSubmit(item)}>{item.submission ? 'Resubmit evidence' : 'Submit evidence'} <ArrowRight size={15} /></button>}</div></article>)}</div> : <EmptyPanel icon={Search} title="No milestones found" text="Try another search term." />}</section>
 }
 
-function ReviewQueue({ submissions, searchTerm, onReview }) {
+function ReviewQueue({ submissions, searchTerm, onReview, token }) {
   const filtered = submissions.filter((item) => `${item.student} ${item.title} ${item.subject}`.toLowerCase().includes(searchTerm.toLowerCase()))
   return <section><div className="page-heading"><div><span className="eyebrow">FACULTY WORKSPACE</span><h1>Review submissions</h1><p className="muted">Give every piece of student work thoughtful, timely feedback.</p></div><span className="soft-chip"><Clock3 size={15} />{submissions.length} awaiting review</span></div>
-    {filtered.length ? <div className="submission-list">{filtered.map((item) => <article className="submission-card" key={item.id}><div className="submission-card-top"><div className="avatar">{item.student.split(' ').map((part) => part[0]).join('').slice(0, 2)}</div><div><strong>{item.student}</strong><span>{item.email}</span></div><span className="status-pill status-pending">Awaiting review</span></div><div className="submission-content"><span className="eyebrow">{item.subject}</span><h2>{item.title}</h2><p>{item.submission.summary}</p>{item.submission.proof_url && <a className="evidence-link" href={item.submission.proof_url} target="_blank" rel="noreferrer"><FileText size={15} />Open submitted evidence <ArrowUpRight size={14} /></a>}<span className="submitted-date">Submitted {new Date(item.updated_at).toLocaleString()}</span></div><div className="submission-actions"><button className="button button-quiet" onClick={() => onReview(item, 'needs_revision')}>Request changes</button><button className="button button-primary" onClick={() => onReview(item, 'verified')}><Check size={16} /> Verify work</button></div></article>)}</div> : <EmptyPanel icon={CheckCircle2} title="Nothing to review right now" text="Student evidence will appear here when it is ready." />}</section>
+    {filtered.length ? <div className="submission-list">{filtered.map((item) => <article className="submission-card" key={item.id}><div className="submission-card-top"><div className="avatar">{item.student.split(' ').map((part) => part[0]).join('').slice(0, 2)}</div><div><strong>{item.student}</strong><span>{item.email}</span></div><span className="status-pill status-pending">Awaiting review</span></div><div className="submission-content"><span className="eyebrow">{item.subject}</span><h2>{item.title}</h2><p>{item.submission.summary}</p>{item.submission.proof_url && <a className="evidence-link" href={item.submission.proof_url} target="_blank" rel="noreferrer"><FileText size={15} />Open submitted evidence <ArrowUpRight size={14} /></a>}{item.evidence_file_id && <EvidenceLink token={token} evidenceId={item.evidence_file_id} />}<span className="submitted-date">Submitted {new Date(item.updated_at).toLocaleString()}</span></div><div className="submission-actions"><button className="button button-quiet" onClick={() => onReview(item, 'needs_revision')}>Request changes</button><button className="button button-primary" onClick={() => onReview(item, 'verified')}><Check size={16} /> Verify work</button></div></article>)}</div> : <EmptyPanel icon={CheckCircle2} title="Nothing to review right now" text="Student evidence will appear here when it is ready." />}</section>
 }
 
 function Accounts({ users, searchTerm, onCreateTeacher }) {

@@ -10,7 +10,10 @@ from app.api.router import router as api_router
 def create_app() -> FastAPI:
     application = FastAPI(
         title=APP_NAME,
-        description="Academic progress and evidence verification platform.",
+        description=(
+            "Web platform for verified academic milestones, co-curricular student "
+            "achievements, shareable portfolios, and institutional activity reports."
+        ),
         version="1.0.0",
         lifespan=lifespan,
     )

@@ -19,9 +19,13 @@ class StudentMilestone(Base):
     chapter_id: Mapped[int] = mapped_column(Integer, ForeignKey("chapter.id", ondelete="CASCADE"), nullable=False)
     
     status: Mapped[MilestoneStatus] = mapped_column(Enum(MilestoneStatus), default=MilestoneStatus.LOCKED, nullable=False)
+    evidence_file_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("evidence_file.id", ondelete="SET NULL"), nullable=True
+    )
     submission_payload: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)  # Student URLs, repo links, text verification proof
     teacher_feedback: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     student: Mapped["StudentProfile"] = relationship(back_populates="milestones")
     chapter: Mapped["Chapter"] = relationship(back_populates="student_milestones")
+    evidence_file: Mapped[Optional["EvidenceFile"]] = relationship()

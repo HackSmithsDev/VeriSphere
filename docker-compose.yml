@@ -24,6 +24,7 @@ services:
       GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash}
     volumes:
       - verisphere-data:/app/data
+      - verisphere-uploads:/app/uploads
     networks:
       - verisphere-network
 
@@ -46,3 +47,4 @@ networks:
 
 volumes:
   verisphere-data:
+  verisphere-uploads:

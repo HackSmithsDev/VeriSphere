@@ -14,6 +14,7 @@ class MilestoneSubmission(BaseModel):
 
     summary: str = Field(min_length=10, max_length=4000)
     proof_url: HttpUrl | None = None
+    evidence_file_id: str | None = Field(default=None, min_length=36, max_length=36)
 
 
 class MilestoneReview(BaseModel):

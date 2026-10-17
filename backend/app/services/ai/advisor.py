@@ -11,6 +11,7 @@ from app.core.config import (
     GROQ_MODEL,
 )
 from app.db.models.academic import Chapter, Course, Subject
+from app.db.models.activity import ActivityStatus, StudentActivity
 from app.db.models.milestone import MilestoneStatus, StudentMilestone
 from app.db.models.user import StudentProfile, User, UserRole
 
@@ -186,10 +187,41 @@ async def build_learning_context(user: User, db: AsyncSession) -> str:
                 f"- {subject.name}, {chapter.title}: {milestone.status.value}"
                 + (f"; teacher feedback: {feedback}" if feedback else "")
             )
+        activity_rows = await db.scalars(
+            select(StudentActivity)
+            .where(StudentActivity.student_id == profile.id)
+            .order_by(StudentActivity.created_at.desc())
+            .limit(30)
+        )
+        activities = [
+            f"- {activity.category.value}, {activity.title}: {activity.status.value}"
+            for activity in activity_rows
+        ]
+        preferences = profile.career_preferences or {}
+        targets = (
+            preferences.get("target_roles", preferences.get("roles", []))
+            if isinstance(preferences, dict)
+            else []
+        )
+        if isinstance(targets, str):
+            targets = [targets]
+        career_interests = (
+            [
+                target.strip()
+                for target in targets
+                if isinstance(target, str) and target.strip()
+            ]
+            if isinstance(targets, list)
+            else []
+        )
         return (
             f"Role: student\nCourse: {course.name if course else 'not available'}"
-            f"\nCurrent semester: {profile.current_semester}\nMilestones:\n"
+            f"\nCurrent semester: {profile.current_semester}"
+            f"\nCareer interests: {', '.join(career_interests) if career_interests else 'not provided'}"
+            "\nMilestones:\n"
             + ("\n".join(milestones) if milestones else "- No milestones recorded.")
+            + "\nCo-curricular activities:\n"
+            + ("\n".join(activities) if activities else "- No activities recorded.")
         )
 
     rows = await db.execute(
@@ -208,7 +240,28 @@ async def build_learning_context(user: User, db: AsyncSession) -> str:
             f"- Submission {index}: {subject.name}, {chapter.title}"
             + (f"; student evidence summary: {summary}" if summary else "")
         )
+    activity_rows = await db.scalars(
+        select(StudentActivity)
+        .where(StudentActivity.status == ActivityStatus.PENDING_VERIFICATION)
+        .order_by(StudentActivity.created_at)
+        .limit(30)
+    )
+    pending_activities = [
+        f"- Activity {index}: {activity.category.value}, {activity.title}"
+        + (
+            f"; student evidence summary: {activity.description[:500]}"
+            if activity.description
+            else ""
+        )
+        for index, activity in enumerate(activity_rows, start=1)
+    ]
     return (
         "Role: faculty\nPending submissions shown (maximum 30):\n"
         + ("\n".join(submissions) if submissions else "- No submissions are pending.")
+        + "\nPending co-curricular activity submissions (maximum 30):\n"
+        + (
+            "\n".join(pending_activities)
+            if pending_activities
+            else "- No activities are pending review."
+        )
     )

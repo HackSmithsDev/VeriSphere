@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.dependencies import require_roles
 from app.db.models.academic import Chapter, Course, Subject
 from app.db.models.milestone import MilestoneStatus, StudentMilestone
+from app.db.models.records import EvidenceFile
 from app.db.models.user import StudentProfile, User
 from app.db.session import get_db
 from app.schemas.academic import MilestoneSubmission
@@ -97,6 +98,7 @@ async def list_milestones(
             "semester": subject.semester,
             "status": milestone.status.value,
             "submission": milestone.submission_payload,
+            "evidence_file_id": milestone.evidence_file_id,
             "feedback": milestone.teacher_feedback,
         }
         for milestone, chapter, subject in rows
@@ -128,9 +130,16 @@ async def submit_milestone(
             status_code=409,
             detail="Only an in-progress milestone can be submitted or resubmitted.",
         )
+    if submission.evidence_file_id is not None:
+        evidence = await db.get(EvidenceFile, submission.evidence_file_id)
+        if evidence is None or evidence.student_id != profile.id:
+            raise HTTPException(
+                status_code=404, detail="Uploaded evidence file not found."
+            )
     milestone.submission_payload = submission.model_dump(
         mode="json", exclude_none=True
     )
+    milestone.evidence_file_id = submission.evidence_file_id
     milestone.status = MilestoneStatus.PENDING_VERIFICATION
     milestone.teacher_feedback = None
     await db.flush()

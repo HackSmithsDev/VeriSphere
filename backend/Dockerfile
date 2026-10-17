@@ -33,8 +33,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Create a non-root system user for secure container execution
 RUN groupadd -g 1001 aera && \
     useradd -u 1001 -g aera -s /bin/bash -m aera && \
-    mkdir -p /app/data && \
-    chown -R aera:aera /app/data
+    mkdir -p /app/data /app/uploads && \
+    chown -R aera:aera /app/data /app/uploads
 
 # Copy compiled Python packages from the builder stage
 COPY --from=builder /root/.local /home/aera/.local

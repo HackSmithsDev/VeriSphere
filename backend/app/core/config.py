@@ -7,6 +7,9 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).resolve().parents[2] / ".env", override=False)
 
 APP_NAME = os.getenv("APP_NAME", "VeriSphere")
+UPLOAD_DIR = Path(
+    os.getenv("UPLOAD_DIR", str(Path(__file__).resolve().parents[2] / "uploads"))
+).resolve()
 APP_ENV = os.getenv("APP_ENV", "development").lower()
 HOST = os.getenv("HOST", "0.0.0.0")
 PORT = int(os.getenv("PORT", "8088"))

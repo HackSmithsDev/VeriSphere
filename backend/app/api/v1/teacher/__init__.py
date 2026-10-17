@@ -1,17 +1,26 @@
+from datetime import UTC, datetime
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.dependencies import require_roles
 from app.db.models.academic import Chapter, Subject
+from app.db.models.activity import ActivityStatus, StudentActivity
 from app.db.models.milestone import MilestoneStatus, StudentMilestone
 from app.db.models.user import StudentProfile, User
 from app.db.session import get_db
+from app.schemas.activity import (
+    ActivityResponse,
+    ActivityReview,
+    ActivitySubmissionResponse,
+)
 from app.schemas.academic import MilestoneReview
 
 
 router = APIRouter(prefix="/teacher", tags=["teacher"])
 teacher_only = require_roles("teacher")
+staff_only = require_roles("teacher", "admin")
 
 
 @router.get("/dashboard")
@@ -24,7 +33,18 @@ async def dashboard(
         )
     )
     students = await db.scalar(select(func.count(StudentProfile.id)))
-    return {"stats": {"pending_reviews": pending or 0, "students": students or 0}}
+    pending_activities = await db.scalar(
+        select(func.count(StudentActivity.id)).where(
+            StudentActivity.status == ActivityStatus.PENDING_VERIFICATION
+        )
+    )
+    return {
+        "stats": {
+            "pending_reviews": pending or 0,
+            "pending_activity_reviews": pending_activities or 0,
+            "students": students or 0,
+        }
+    }
 
 
 @router.get("/submissions")
@@ -48,6 +68,7 @@ async def list_submissions(
             "title": chapter.title,
             "subject": subject.name,
             "submission": milestone.submission_payload or {},
+            "evidence_file_id": milestone.evidence_file_id,
             "updated_at": milestone.updated_at.isoformat(),
         }
         for milestone, student, chapter, subject, user in rows
@@ -94,3 +115,44 @@ async def review_submission(
             next_milestone.status = MilestoneStatus.IN_PROGRESS
     await db.flush()
     return {"id": milestone.id, "status": milestone.status.value}
+
+
+@router.get("/activities", response_model=list[ActivitySubmissionResponse])
+async def list_pending_activities(
+    _: User = Depends(staff_only), db: AsyncSession = Depends(get_db)
+) -> list[dict]:
+    rows = await db.execute(
+        select(StudentActivity, StudentProfile)
+        .join(StudentProfile, StudentActivity.student_id == StudentProfile.id)
+        .where(StudentActivity.status == ActivityStatus.PENDING_VERIFICATION)
+        .order_by(StudentActivity.created_at)
+    )
+    return [
+        {
+            **ActivityResponse.model_validate(activity).model_dump(mode="json"),
+            "student": f"{student.first_name} {student.last_name}",
+        }
+        for activity, student in rows
+    ]
+
+
+@router.post("/activities/{activity_id}/review")
+async def review_activity(
+    activity_id: int,
+    review: ActivityReview,
+    user: User = Depends(staff_only),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    activity = await db.get(StudentActivity, activity_id)
+    if activity is None:
+        raise HTTPException(status_code=404, detail="Activity not found.")
+    if activity.status != ActivityStatus.PENDING_VERIFICATION:
+        raise HTTPException(
+            status_code=409, detail="This activity is no longer awaiting review."
+        )
+    activity.status = ActivityStatus(review.decision)
+    activity.review_feedback = review.feedback.strip() or None
+    activity.reviewer_id = user.id
+    activity.reviewed_at = datetime.now(UTC).replace(tzinfo=None)
+    await db.flush()
+    return {"id": activity.id, "status": activity.status.value}

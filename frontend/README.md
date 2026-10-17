@@ -1,6 +1,6 @@
 # VeriSphere frontend
 
-The frontend is a responsive, web-only React application built with Vite. It serves the public landing and registration experience; student curriculum, evidence upload, attendance, marks, achievement, and shareable portfolio views; and role-specific faculty review and academic-record entry plus administrator reporting workspaces. Shared portfolio links open as public web pages that can be printed or saved as PDF. No native mobile client is included.
+The frontend is a responsive, web-only React application built with Vite. It serves the public landing and registration experience; student curriculum, evidence upload, attendance, marks, achievement, and shareable portfolio views; faculty workspaces scoped to courses assigned by an administrator; and administrator account, assignment, and reporting tools. Shared portfolio links open as public web pages that can be printed or saved as PDF. No native mobile client is included.
 
 ## Development
 

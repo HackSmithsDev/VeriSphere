@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.course_access import assigned_course_ids, can_access_course
 from app.core.dependencies import require_roles
 from app.db.models.academic import Subject
 from app.db.models.records import (
@@ -20,7 +21,7 @@ staff_only = require_roles("teacher", "admin")
 
 
 async def _validate_student_subject(
-    student_id: int, subject_id: int, db: AsyncSession
+    student_id: int, subject_id: int, user: User, db: AsyncSession
 ) -> tuple[StudentProfile, Subject]:
     student = await db.get(StudentProfile, student_id)
     subject = await db.get(Subject, subject_id)
@@ -30,6 +31,8 @@ async def _validate_student_subject(
         raise HTTPException(
             status_code=422, detail="The subject does not belong to the student's course."
         )
+    if not await can_access_course(user, subject.course_id, db):
+        raise HTTPException(status_code=404, detail="Student or subject not found.")
     return student, subject
 
 
@@ -121,16 +124,23 @@ async def get_student_academic_records(
 
 @router.get("/teacher/academic-options")
 async def get_academic_options(
-    _: User = Depends(staff_only), db: AsyncSession = Depends(get_db)
+    user: User = Depends(staff_only), db: AsyncSession = Depends(get_db)
 ) -> dict:
-    students = await db.execute(
-        select(StudentProfile.id, StudentProfile.first_name, StudentProfile.last_name, StudentProfile.course_id)
-        .order_by(StudentProfile.last_name, StudentProfile.first_name)
-    )
-    subjects = await db.execute(
-        select(Subject.id, Subject.code, Subject.name, Subject.course_id)
-        .order_by(Subject.course_id, Subject.semester, Subject.name)
-    )
+    course_ids = await assigned_course_ids(user, db)
+    student_query = select(
+        StudentProfile.id,
+        StudentProfile.first_name,
+        StudentProfile.last_name,
+        StudentProfile.course_id,
+    ).order_by(StudentProfile.last_name, StudentProfile.first_name)
+    subject_query = select(
+        Subject.id, Subject.code, Subject.name, Subject.course_id
+    ).order_by(Subject.course_id, Subject.semester, Subject.name)
+    if course_ids is not None:
+        student_query = student_query.where(StudentProfile.course_id.in_(course_ids))
+        subject_query = subject_query.where(Subject.course_id.in_(course_ids))
+    students = await db.execute(student_query)
+    subjects = await db.execute(subject_query)
     return {
         "students": [
             {
@@ -158,7 +168,7 @@ async def record_attendance(
     user: User = Depends(staff_only),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    await _validate_student_subject(payload.student_id, payload.subject_id, db)
+    await _validate_student_subject(payload.student_id, payload.subject_id, user, db)
     record = await db.scalar(
         select(AttendanceRecord).where(
             AttendanceRecord.student_id == payload.student_id,
@@ -188,7 +198,7 @@ async def record_assessment_mark(
     user: User = Depends(staff_only),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    await _validate_student_subject(payload.student_id, payload.subject_id, db)
+    await _validate_student_subject(payload.student_id, payload.subject_id, user, db)
     if payload.score > payload.maximum_score:
         raise HTTPException(
             status_code=422, detail="Score cannot exceed the maximum score."

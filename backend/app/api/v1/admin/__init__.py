@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.core.dependencies import require_roles
 from app.core.security import hash_password
@@ -10,7 +11,11 @@ from app.db.models.milestone import MilestoneStatus, StudentMilestone
 from app.db.models.records import AssessmentMark, AttendanceRecord, AttendanceStatus
 from app.db.models.user import StudentProfile, TeacherProfile, User, UserRole
 from app.db.session import get_db
-from app.schemas.academic import CourseCreate, TeacherCreate
+from app.schemas.academic import (
+    CourseCreate,
+    TeacherCourseAssignment,
+    TeacherCreate,
+)
 
 
 router = APIRouter(prefix="/admin", tags=["administration"])
@@ -51,7 +56,12 @@ async def overview(
 async def list_users(
     _: User = Depends(admin_only), db: AsyncSession = Depends(get_db)
 ) -> list[dict]:
-    users = await db.scalars(select(User).order_by(User.created_at.desc()).limit(200))
+    users = await db.scalars(
+        select(User)
+        .options(selectinload(User.assigned_courses))
+        .order_by(User.created_at.desc())
+        .limit(200)
+    )
     return [
         {
             "id": user.id,
@@ -59,6 +69,12 @@ async def list_users(
             "role": user.role.value,
             "active": user.is_active,
             "created_at": user.created_at.isoformat(),
+            "courses": [
+                {"id": course.id, "name": course.name}
+                for course in user.assigned_courses
+            ]
+            if user.role == UserRole.TEACHER
+            else [],
         }
         for user in users
     ]
@@ -97,9 +113,45 @@ async def create_teacher(
         last_name=payload.last_name.strip(),
         department=payload.department.strip(),
     )
+    if payload.course_ids:
+        courses = list(
+            await db.scalars(select(Course).where(Course.id.in_(payload.course_ids)))
+        )
+        if len(courses) != len(payload.course_ids):
+            raise HTTPException(status_code=422, detail="One or more courses do not exist.")
+        user.assigned_courses = courses
     db.add(user)
     await db.flush()
     return {"id": user.id, "email": user.email, "role": user.role.value}
+
+
+@router.put("/teachers/{teacher_id}/courses")
+async def assign_teacher_courses(
+    teacher_id: int,
+    payload: TeacherCourseAssignment,
+    _: User = Depends(admin_only),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    teacher = await db.scalar(
+        select(User)
+        .where(User.id == teacher_id, User.role == UserRole.TEACHER)
+        .options(selectinload(User.assigned_courses))
+    )
+    if teacher is None:
+        raise HTTPException(status_code=404, detail="Faculty account not found.")
+    courses = (
+        list(await db.scalars(select(Course).where(Course.id.in_(payload.course_ids))))
+        if payload.course_ids
+        else []
+    )
+    if len(courses) != len(payload.course_ids):
+        raise HTTPException(status_code=422, detail="One or more courses do not exist.")
+    teacher.assigned_courses = courses
+    await db.flush()
+    return {
+        "teacher_id": teacher.id,
+        "courses": [{"id": course.id, "name": course.name} for course in courses],
+    }
 
 
 @router.get("/reports/activities")

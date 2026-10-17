@@ -4,6 +4,7 @@ import httpx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.course_access import assigned_course_ids
 from app.core.config import (
     GEMINI_API_KEY,
     GEMINI_MODEL,
@@ -224,7 +225,8 @@ async def build_learning_context(user: User, db: AsyncSession) -> str:
             + ("\n".join(activities) if activities else "- No activities recorded.")
         )
 
-    rows = await db.execute(
+    course_ids = await assigned_course_ids(user, db)
+    milestone_query = (
         select(StudentMilestone, Chapter, Subject)
         .join(Chapter, StudentMilestone.chapter_id == Chapter.id)
         .join(Subject, Chapter.subject_id == Subject.id)
@@ -232,6 +234,9 @@ async def build_learning_context(user: User, db: AsyncSession) -> str:
         .order_by(StudentMilestone.updated_at)
         .limit(30)
     )
+    if course_ids is not None:
+        milestone_query = milestone_query.where(Subject.course_id.in_(course_ids))
+    rows = await db.execute(milestone_query)
     submissions = []
     for index, (milestone, chapter, subject) in enumerate(rows, start=1):
         payload = milestone.submission_payload or {}
@@ -240,12 +245,16 @@ async def build_learning_context(user: User, db: AsyncSession) -> str:
             f"- Submission {index}: {subject.name}, {chapter.title}"
             + (f"; student evidence summary: {summary}" if summary else "")
         )
-    activity_rows = await db.scalars(
+    activity_query = (
         select(StudentActivity)
+        .join(StudentProfile, StudentActivity.student_id == StudentProfile.id)
         .where(StudentActivity.status == ActivityStatus.PENDING_VERIFICATION)
         .order_by(StudentActivity.created_at)
         .limit(30)
     )
+    if course_ids is not None:
+        activity_query = activity_query.where(StudentProfile.course_id.in_(course_ids))
+    activity_rows = await db.scalars(activity_query)
     pending_activities = [
         f"- Activity {index}: {activity.category.value}, {activity.title}"
         + (

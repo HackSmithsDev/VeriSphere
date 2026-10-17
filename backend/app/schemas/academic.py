@@ -1,6 +1,6 @@
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, HttpUrl
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, HttpUrl, model_validator
 
 
 class CourseResponse(BaseModel):
@@ -37,3 +37,24 @@ class TeacherCreate(BaseModel):
     first_name: str = Field(min_length=1, max_length=100)
     last_name: str = Field(min_length=1, max_length=100)
     department: str = Field(min_length=2, max_length=255)
+    course_ids: list[int] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def require_unique_course_ids(self) -> "TeacherCreate":
+        if len(self.course_ids) != len(set(self.course_ids)) or any(
+            course_id < 1 for course_id in self.course_ids
+        ):
+            raise ValueError("Course IDs must be unique positive integers.")
+        return self
+
+
+class TeacherCourseAssignment(BaseModel):
+    course_ids: list[int]
+
+    @model_validator(mode="after")
+    def require_unique_course_ids(self) -> "TeacherCourseAssignment":
+        if len(self.course_ids) != len(set(self.course_ids)) or any(
+            course_id < 1 for course_id in self.course_ids
+        ):
+            raise ValueError("Course IDs must be unique positive integers.")
+        return self

@@ -10,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.course_access import can_access_course
 from app.core.config import UPLOAD_DIR
 from app.core.dependencies import get_current_user, require_roles
 from app.db.models.activity import ActivityStatus, StudentActivity
@@ -156,6 +157,18 @@ async def download_evidence(
     if user.role == UserRole.STUDENT:
         allowed = profile is not None and profile.id == evidence.student_id
     elif user.role in {UserRole.TEACHER, UserRole.ADMIN}:
+        profile_course_id = await db.scalar(
+            select(StudentProfile.course_id).where(
+                StudentProfile.id == evidence.student_id
+            )
+        )
+        course_allowed = (
+            user.role == UserRole.ADMIN
+            or (
+                profile_course_id is not None
+                and await can_access_course(user, profile_course_id, db)
+            )
+        )
         activity_link = await db.scalar(
             select(StudentActivity.id).where(
                 StudentActivity.evidence_file_id == evidence.id
@@ -166,7 +179,10 @@ async def download_evidence(
                 StudentMilestone.evidence_file_id == evidence.id
             )
         )
-        allowed = activity_link is not None or milestone_link is not None
+        allowed = (
+            course_allowed
+            and (activity_link is not None or milestone_link is not None)
+        )
     else:
         allowed = False
     if not allowed:

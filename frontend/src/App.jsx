@@ -25,7 +25,12 @@ import {
   Users,
   X,
 } from 'lucide-react'
-import { getAdminOverview, getAdminUsers, createTeacher } from './api/admin'
+import {
+  getAdminOverview,
+  getAdminUsers,
+  createTeacher,
+  saveTeacherCourses,
+} from './api/admin'
 import { AssistantChat } from './components/assistant/AssistantChat'
 import { getCurrentUser, login, logout, register } from './api/auth'
 import { getAnnouncements, getCourses } from './api/guest'
@@ -251,6 +256,7 @@ function WorkspaceApp() {
     const formElement = event.currentTarget
     const form = new FormData(formElement)
     const values = Object.fromEntries(form.entries())
+    values.course_ids = form.getAll('course_ids').map(Number)
     try {
       await createTeacher(token, values)
       await refreshWorkspace(token, user.role)
@@ -438,6 +444,15 @@ function WorkspaceApp() {
               users={workspace.users || []}
               searchTerm={searchTerm}
               onCreateTeacher={createFaculty}
+              onSaveTeacherCourses={async (teacherId, courseIds) => {
+                try {
+                  await saveTeacherCourses(token, teacherId, courseIds)
+                  await refreshWorkspace(token, user.role)
+                  setNotice('Faculty course assignments updated.')
+                } catch (requestError) {
+                  setError(requestError.message)
+                }
+              }}
             />
           )}
           {page === 'announcements' && <Announcements />}
@@ -589,9 +604,120 @@ function ReviewQueue({ submissions, searchTerm, onReview, token }) {
     {filtered.length ? <div className="submission-list">{filtered.map((item) => <article className="submission-card" key={item.id}><div className="submission-card-top"><div className="avatar">{item.student.split(' ').map((part) => part[0]).join('').slice(0, 2)}</div><div><strong>{item.student}</strong><span>{item.email}</span></div><span className="status-pill status-pending">Awaiting review</span></div><div className="submission-content"><span className="eyebrow">{item.subject}</span><h2>{item.title}</h2><p>{item.submission.summary}</p>{item.submission.proof_url && <a className="evidence-link" href={item.submission.proof_url} target="_blank" rel="noreferrer"><FileText size={15} />Open submitted evidence <ArrowUpRight size={14} /></a>}{item.evidence_file_id && <EvidenceLink token={token} evidenceId={item.evidence_file_id} />}<span className="submitted-date">Submitted {new Date(item.updated_at).toLocaleString()}</span></div><div className="submission-actions"><button className="button button-quiet" onClick={() => onReview(item, 'needs_revision')}>Request changes</button><button className="button button-primary" onClick={() => onReview(item, 'verified')}><Check size={16} /> Verify work</button></div></article>)}</div> : <EmptyPanel icon={CheckCircle2} title="Nothing to review right now" text="Student evidence will appear here when it is ready." />}</section>
 }
 
-function Accounts({ users, searchTerm, onCreateTeacher }) {
-  const filtered = users.filter((item) => `${item.email} ${item.role}`.toLowerCase().includes(searchTerm.toLowerCase()))
-  return <section><div className="page-heading"><div><span className="eyebrow">CAMPUS ADMINISTRATION</span><h1>Accounts</h1><p className="muted">Manage the people who make your campus community.</p></div></div><div className="accounts-layout"><div className="panel accounts-panel"><div className="panel-heading"><div><span className="eyebrow">DIRECTORY</span><h2>Campus accounts</h2></div><span className="soft-chip">{users.length} accounts</span></div>{filtered.length ? <div className="account-list">{filtered.map((item) => <div className="account-row" key={item.id}><div className="avatar avatar-small">{item.email.slice(0, 2).toUpperCase()}</div><div className="activity-copy"><strong>{item.email}</strong><span>Joined {new Date(item.created_at).toLocaleDateString()}</span></div><span className="role-pill">{item.role}</span><span className={`account-state ${item.active ? 'is-active' : ''}`}>{item.active ? 'Active' : 'Disabled'}</span></div>)}</div> : <p className="muted empty-copy">No accounts match your search.</p>}</div><div className="panel faculty-panel"><div className="feature-icon feature-violet"><Users size={18} /></div><h2>Invite faculty</h2><p>Create faculty access for teachers who need to review student evidence.</p><form className="auth-form compact-form" onSubmit={onCreateTeacher}><div className="field-row"><label>First name<input name="first_name" required maxLength="100" /></label><label>Last name<input name="last_name" required maxLength="100" /></label></div><label>Work email<input name="email" type="email" required maxLength="255" /></label><label>Department<input name="department" required minLength="2" maxLength="255" /></label><label>Temporary password<input name="password" type="password" required minLength="8" maxLength="128" /></label><button className="button button-primary button-full" type="submit"><Plus size={16} /> Create faculty account</button></form></div></div></section>
+function Accounts({
+  users,
+  searchTerm,
+  onCreateTeacher,
+  onSaveTeacherCourses,
+}) {
+  const [courses, setCourses] = useState([])
+  const [courseError, setCourseError] = useState('')
+  const filtered = users.filter((item) =>
+    `${item.email} ${item.role} ${(item.courses || []).map((course) => course.name).join(' ')}`
+      .toLowerCase()
+      .includes(searchTerm.toLowerCase()),
+  )
+
+  useEffect(() => {
+    getCourses()
+      .then(setCourses)
+      .catch((requestError) => setCourseError(requestError.message))
+  }, [])
+
+  const saveAssignments = (event, teacherId) => {
+    event.preventDefault()
+    const selectedCourses = Array.from(
+      event.currentTarget.elements.course_ids.selectedOptions,
+      (option) => Number(option.value),
+    )
+    void onSaveTeacherCourses(teacherId, selectedCourses)
+  }
+
+  return (
+    <section>
+      <div className="page-heading">
+        <div>
+          <span className="eyebrow">CAMPUS ADMINISTRATION</span>
+          <h1>Accounts</h1>
+          <p className="muted">Manage campus accounts and faculty course access.</p>
+        </div>
+      </div>
+      <div className="accounts-layout">
+        <div className="panel accounts-panel">
+          <div className="panel-heading">
+            <div><span className="eyebrow">DIRECTORY</span><h2>Campus accounts</h2></div>
+            <span className="soft-chip">{users.length} accounts</span>
+          </div>
+          {courseError && <div className="alert alert-error" role="alert">{courseError}</div>}
+          {filtered.length ? (
+            <div className="account-list">
+              {filtered.map((item) => (
+                <article className="account-row" key={item.id}>
+                  <div className="avatar avatar-small">{item.email.slice(0, 2).toUpperCase()}</div>
+                  <div className="activity-copy">
+                    <strong>{item.email}</strong>
+                    <span>Joined {new Date(item.created_at).toLocaleDateString()}</span>
+                  </div>
+                  <span className="role-pill">{item.role}</span>
+                  <span className={`account-state ${item.active ? 'is-active' : ''}`}>
+                    {item.active ? 'Active' : 'Disabled'}
+                  </span>
+                  {item.role === 'teacher' && (
+                    <form
+                      className="teacher-course-assignment"
+                      onSubmit={(event) => saveAssignments(event, item.id)}
+                    >
+                      <label>
+                        Assigned courses
+                        <select
+                          name="course_ids"
+                          multiple
+                          size={Math.max(2, Math.min(courses.length, 5))}
+                          defaultValue={(item.courses || []).map((course) => String(course.id))}
+                          key={`${item.id}-${(item.courses || []).map((course) => course.id).join(',')}`}
+                          disabled={!courses.length}
+                        >
+                          {courses.map((course) => (
+                            <option key={course.id} value={course.id}>{course.name}</option>
+                          ))}
+                        </select>
+                      </label>
+                      <button className="button button-secondary" type="submit" disabled={!courses.length}>
+                        Save assignments
+                      </button>
+                    </form>
+                  )}
+                </article>
+              ))}
+            </div>
+          ) : <p className="muted empty-copy">No accounts match your search.</p>}
+        </div>
+        <div className="panel faculty-panel">
+          <div className="feature-icon feature-violet"><Users size={18} /></div>
+          <h2>Invite faculty</h2>
+          <p>Create faculty access and assign the courses they are responsible for.</p>
+          <form className="auth-form compact-form" onSubmit={onCreateTeacher}>
+            <div className="field-row">
+              <label>First name<input name="first_name" required maxLength="100" /></label>
+              <label>Last name<input name="last_name" required maxLength="100" /></label>
+            </div>
+            <label>Work email<input name="email" type="email" required maxLength="255" /></label>
+            <label>Department<input name="department" required minLength="2" maxLength="255" /></label>
+            <label>Temporary password<input name="password" type="password" required minLength="8" maxLength="128" /></label>
+            <label>Assigned courses
+              <select name="course_ids" multiple required size={Math.max(2, Math.min(courses.length, 5))} disabled={!courses.length}>
+                {courses.map((course) => <option key={course.id} value={course.id}>{course.name}</option>)}
+              </select>
+              <span className="optional">Select every course this faculty account should access.</span>
+            </label>
+            <button className="button button-primary button-full" type="submit" disabled={!courses.length}>
+              <Plus size={16} /> Create faculty account
+            </button>
+          </form>
+        </div>
+      </div>
+    </section>
+  )
 }
 
 function Announcements() {

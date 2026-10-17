@@ -53,6 +53,7 @@ Before upgrading an existing database, run `cd backend && python3 -m alembic upg
 
 - Student registration, sign-in, curriculum milestone tracking, evidence submission, and progress overview.
 - Role-protected faculty review with verification or revision feedback; verification unlocks the next milestone.
+- Administrator-managed faculty-to-course assignments. Faculty can review academic milestones and co-curricular submissions, record attendance and marks, and view AI teaching context only for assigned courses. New faculty invitations require selecting at least one course; assignments can be changed or revoked from Accounts.
 - Student submission of certifications, courses/MOOCs, seminars, internships, projects, club work, volunteering, leadership, competitions, and community service, with an evidence URL and staff verification.
 - Evidence attachment as a PDF, PNG, or JPEG (up to 10 MB), stored privately and made available only to its student, authorized reviewers, or anyone with an explicitly enabled share link for verified portfolio evidence.
 - Teacher/admin entry of subject-level attendance and continuous assessment marks; students can review their own records and attendance percentages.
@@ -66,7 +67,7 @@ Before upgrading an existing database, run `cd backend && python3 -m alembic upg
 
 The web application implements the central verified-record workflow, student-submitted evidence links and files, staff review, verified portfolio sharing, attendance and assessment recording, and institutional summary reporting. Reports are general summaries for internal and accreditation preparation; they are not official NAAC, AICTE, or NIRF report templates.
 
-Attendance and assessment records are entered by faculty per student and subject; attendance is upserted once per date and subject. Uploaded files are limited to PDF, PNG, or JPEG and 10 MB per file. Share links expose only verified records and their evidence, and can be revoked.
+Attendance and assessment records are entered by faculty per student and subject; attendance is upserted once per date and subject. Course assignments are enforced by the API, not only the interface. Existing faculty accounts have no course access until an administrator assigns courses. Uploaded files are limited to PDF, PNG, or JPEG and 10 MB per file. Share links expose only verified records and their evidence, and can be revoked.
 
 LMS/ERP synchronization and institution-specific accreditation templates are not currently implemented. External integrations require an institution-approved connector contract, credentials, and data-sharing rules; reports currently provide a generic CSV foundation rather than claiming official compliance. AI recommendations are advisory and do not make verification decisions.
 

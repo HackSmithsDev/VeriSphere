@@ -75,6 +75,7 @@ def test_routes_cover_student_teacher_admin_and_public_flows(
                 last_name="Teacher",
                 department="Computer Science",
             )
+            teacher.assigned_courses = [course]
             session.add_all([admin, teacher])
             await session.commit()
             course_id = course.id
@@ -542,9 +543,80 @@ def test_routes_cover_student_teacher_admin_and_public_flows(
                     "first_name": "New",
                     "last_name": "Teacher",
                     "department": "Computer Science",
+                    "course_ids": [course_id],
                 },
             )
             assert response.status_code == 201
+            new_teacher_id = response.json()["id"]
+            new_teacher_headers = {
+                "Authorization": f"Bearer {create_access_token(str(new_teacher_id))}"
+            }
+            response = await client.get(
+                "/api/v1/admin/users",
+                headers=admin_headers,
+            )
+            assert response.status_code == 200
+            assigned_teacher = next(
+                account for account in response.json()
+                if account["id"] == new_teacher_id
+            )
+            assert assigned_teacher["courses"] == [
+                {"id": course_id, "name": "Computer Science"}
+            ]
+            response = await client.get(
+                "/api/v1/teacher/academic-options",
+                headers=new_teacher_headers,
+            )
+            assert response.status_code == 200
+            assert len(response.json()["students"]) == 1
+            assert [subject["code"] for subject in response.json()["subjects"]] == [
+                "CS101"
+            ]
+            response = await client.put(
+                f"/api/v1/admin/teachers/{new_teacher_id}/courses",
+                headers=admin_headers,
+                json={"course_ids": []},
+            )
+            assert response.status_code == 200
+            response = await client.get(
+                "/api/v1/teacher/dashboard",
+                headers=new_teacher_headers,
+            )
+            assert response.status_code == 200
+            assert response.json()["stats"] == {
+                "pending_reviews": 0,
+                "pending_activity_reviews": 0,
+                "students": 0,
+            }
+            response = await client.get(
+                "/api/v1/teacher/academic-options",
+                headers=new_teacher_headers,
+            )
+            assert response.status_code == 200
+            assert response.json() == {"students": [], "subjects": []}
+            response = await client.post(
+                "/api/v1/teacher/attendance",
+                headers=new_teacher_headers,
+                json={
+                    "student_id": 1,
+                    "subject_id": 1,
+                    "attendance_date": "2026-10-17",
+                    "status": "present",
+                },
+            )
+            assert response.status_code == 404
+            response = await client.post(
+                "/api/v1/teacher/submissions/1/review",
+                headers=new_teacher_headers,
+                json={"decision": "verified"},
+            )
+            assert response.status_code == 404
+            response = await client.post(
+                "/api/v1/teacher/activities/1/review",
+                headers=new_teacher_headers,
+                json={"decision": "verified"},
+            )
+            assert response.status_code == 404
 
             response = await client.post(
                 "/api/v1/admin/courses",

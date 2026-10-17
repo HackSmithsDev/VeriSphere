@@ -1,8 +1,27 @@
 # backend/app/db/models/academic.py
 from typing import List
-from sqlalchemy import String, Integer, ForeignKey, Text
+from sqlalchemy import String, Integer, ForeignKey, Text, Table, Column
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.base import Base
+
+
+teacher_course_assignment = Table(
+    "teacher_course_assignment",
+    Base.metadata,
+    Column(
+        "teacher_id",
+        Integer,
+        ForeignKey("user.id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    Column(
+        "course_id",
+        Integer,
+        ForeignKey("course.id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+)
+
 
 class Course(Base):
     """E.g., B.Tech Computer Science Engineering (AI & ML)"""
@@ -12,6 +31,9 @@ class Course(Base):
 
     subjects: Mapped[List["Subject"]] = relationship(back_populates="course", cascade="all, delete-orphan")
     students: Mapped[List["StudentProfile"]] = relationship(back_populates="course")
+    teachers: Mapped[List["User"]] = relationship(
+        secondary=teacher_course_assignment, back_populates="assigned_courses"
+    )
 
 
 class Subject(Base):

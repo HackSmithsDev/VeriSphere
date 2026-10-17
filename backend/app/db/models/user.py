@@ -22,6 +22,9 @@ class User(Base):
     # Polymorphic profiles links
     student_profile: Mapped[Optional["StudentProfile"]] = relationship(back_populates="user", uselist=False, cascade="all, delete-orphan")
     teacher_profile: Mapped[Optional["TeacherProfile"]] = relationship(back_populates="user", uselist=False, cascade="all, delete-orphan")
+    assigned_courses: Mapped[List["Course"]] = relationship(
+        secondary="teacher_course_assignment", back_populates="teachers"
+    )
 
 
 class StudentProfile(Base):

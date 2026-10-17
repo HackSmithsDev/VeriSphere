@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.course_access import assigned_course_ids, can_access_course
 from app.core.dependencies import require_roles
 from app.db.models.academic import Chapter, Subject
 from app.db.models.activity import ActivityStatus, StudentActivity
@@ -25,17 +26,37 @@ staff_only = require_roles("teacher", "admin")
 
 @router.get("/dashboard")
 async def dashboard(
-    _: User = Depends(teacher_only), db: AsyncSession = Depends(get_db)
+    user: User = Depends(teacher_only), db: AsyncSession = Depends(get_db)
 ) -> dict:
+    course_ids = await assigned_course_ids(user, db)
+    if not course_ids:
+        return {
+            "stats": {
+                "pending_reviews": 0,
+                "pending_activity_reviews": 0,
+                "students": 0,
+            }
+        }
     pending = await db.scalar(
-        select(func.count(StudentMilestone.id)).where(
-            StudentMilestone.status == MilestoneStatus.PENDING_VERIFICATION
+        select(func.count(StudentMilestone.id))
+        .join(Chapter, StudentMilestone.chapter_id == Chapter.id)
+        .join(Subject, Chapter.subject_id == Subject.id)
+        .where(
+            StudentMilestone.status == MilestoneStatus.PENDING_VERIFICATION,
+            Subject.course_id.in_(course_ids),
         )
     )
-    students = await db.scalar(select(func.count(StudentProfile.id)))
+    students = await db.scalar(
+        select(func.count(StudentProfile.id)).where(
+            StudentProfile.course_id.in_(course_ids)
+        )
+    )
     pending_activities = await db.scalar(
-        select(func.count(StudentActivity.id)).where(
-            StudentActivity.status == ActivityStatus.PENDING_VERIFICATION
+        select(func.count(StudentActivity.id))
+        .join(StudentProfile, StudentActivity.student_id == StudentProfile.id)
+        .where(
+            StudentActivity.status == ActivityStatus.PENDING_VERIFICATION,
+            StudentProfile.course_id.in_(course_ids),
         )
     )
     return {
@@ -49,15 +70,21 @@ async def dashboard(
 
 @router.get("/submissions")
 async def list_submissions(
-    _: User = Depends(teacher_only), db: AsyncSession = Depends(get_db)
+    user: User = Depends(teacher_only), db: AsyncSession = Depends(get_db)
 ) -> list[dict]:
+    course_ids = await assigned_course_ids(user, db)
+    if not course_ids:
+        return []
     rows = await db.execute(
         select(StudentMilestone, StudentProfile, Chapter, Subject, User)
         .join(StudentProfile, StudentMilestone.student_id == StudentProfile.id)
         .join(User, StudentProfile.user_id == User.id)
         .join(Chapter, StudentMilestone.chapter_id == Chapter.id)
         .join(Subject, Chapter.subject_id == Subject.id)
-        .where(StudentMilestone.status == MilestoneStatus.PENDING_VERIFICATION)
+        .where(
+            StudentMilestone.status == MilestoneStatus.PENDING_VERIFICATION,
+            Subject.course_id.in_(course_ids),
+        )
         .order_by(StudentMilestone.updated_at)
     )
     return [
@@ -79,7 +106,7 @@ async def list_submissions(
 async def review_submission(
     milestone_id: int,
     review: MilestoneReview,
-    _: User = Depends(teacher_only),
+    user: User = Depends(teacher_only),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     if review.decision not in {"verified", "needs_revision"}:
@@ -88,6 +115,15 @@ async def review_submission(
         )
     milestone = await db.get(StudentMilestone, milestone_id)
     if milestone is None:
+        raise HTTPException(status_code=404, detail="Submission not found.")
+    subject_course_id = await db.scalar(
+        select(Subject.course_id)
+        .join(Chapter, Chapter.subject_id == Subject.id)
+        .where(Chapter.id == milestone.chapter_id)
+    )
+    if subject_course_id is None or not await can_access_course(
+        user, subject_course_id, db
+    ):
         raise HTTPException(status_code=404, detail="Submission not found.")
     if milestone.status != MilestoneStatus.PENDING_VERIFICATION:
         raise HTTPException(
@@ -119,14 +155,20 @@ async def review_submission(
 
 @router.get("/activities", response_model=list[ActivitySubmissionResponse])
 async def list_pending_activities(
-    _: User = Depends(staff_only), db: AsyncSession = Depends(get_db)
+    user: User = Depends(staff_only), db: AsyncSession = Depends(get_db)
 ) -> list[dict]:
-    rows = await db.execute(
+    course_ids = await assigned_course_ids(user, db)
+    query = (
         select(StudentActivity, StudentProfile)
         .join(StudentProfile, StudentActivity.student_id == StudentProfile.id)
         .where(StudentActivity.status == ActivityStatus.PENDING_VERIFICATION)
         .order_by(StudentActivity.created_at)
     )
+    if course_ids is not None:
+        if not course_ids:
+            return []
+        query = query.where(StudentProfile.course_id.in_(course_ids))
+    rows = await db.execute(query)
     return [
         {
             **ActivityResponse.model_validate(activity).model_dump(mode="json"),
@@ -143,7 +185,15 @@ async def review_activity(
     user: User = Depends(staff_only),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    activity = await db.get(StudentActivity, activity_id)
+    course_ids = await assigned_course_ids(user, db)
+    query = (
+        select(StudentActivity)
+        .join(StudentProfile, StudentActivity.student_id == StudentProfile.id)
+        .where(StudentActivity.id == activity_id)
+    )
+    if course_ids is not None:
+        query = query.where(StudentProfile.course_id.in_(course_ids))
+    activity = await db.scalar(query)
     if activity is None:
         raise HTTPException(status_code=404, detail="Activity not found.")
     if activity.status != ActivityStatus.PENDING_VERIFICATION:

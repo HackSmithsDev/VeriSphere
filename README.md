@@ -18,6 +18,7 @@ The product is web-only. There is no native mobile application.
 - [Validation](#validation)
 - [Operations and troubleshooting](#operations-and-troubleshooting)
 - [Scope and limitations](#scope-and-limitations)
+- [License](#license)
 
 ## Features
 
@@ -306,4 +307,6 @@ For a real deployment check, start Compose, verify all containers with `docker c
 
 Reports are general summaries for internal review and accreditation preparation; they are not official NAAC, AICTE, or NIRF templates. LMS/ERP synchronization and institution-specific report formats are not implemented. Faculty assignments are enforced by the API. Public portfolios include only verified activities and milestones; sharing can be revoked. AI recommendations are advisory and never make verification decisions.
 
-No license is currently provided. Choose and add one only after the repository owners make that legal decision.
+## License
+
+This project is licensed under the [MIT License](LICENSE).

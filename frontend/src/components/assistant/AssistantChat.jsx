@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import { ArrowUp, Bot, Sparkles } from 'lucide-react'
-import { chatWithAssistant } from '../../api/assistant'
+import { ArrowUp, Bot, Sparkles, ThumbsDown, ThumbsUp } from 'lucide-react'
+import { chatWithAssistant, submitAssistantFeedback } from '../../api/assistant'
 import { ActionButton } from '../ui/ActionButton'
 import { Card } from '../ui/Card'
 
@@ -28,13 +28,50 @@ export function AssistantChat({ role, token }) {
     setBusy(true)
     try {
       const result = await chatWithAssistant(token, history)
-      setMessages([...updatedMessages, { role: 'assistant', content: result.reply }])
+      setMessages([
+        ...updatedMessages,
+        { role: 'assistant', content: result.reply, provider: result.provider },
+      ])
     } catch (requestError) {
-      setMessages(messages)
+      setMessages((current) => current.slice(0, messages.length))
       setInput(content)
       setError(requestError.message)
     } finally {
       setBusy(false)
+    }
+  }
+
+  const rateMessage = async (index, helpful) => {
+    const message = messages[index]
+    if (!message?.provider || message.feedbackSubmitting || message.feedback !== undefined) return
+    setMessages((current) =>
+      current.map((item, itemIndex) =>
+        itemIndex === index
+          ? { ...item, feedbackSubmitting: true, feedbackError: undefined }
+          : item,
+      ),
+    )
+    try {
+      await submitAssistantFeedback(token, message.provider, helpful)
+      setMessages((current) =>
+        current.map((item, itemIndex) =>
+          itemIndex === index
+            ? { ...item, feedbackSubmitting: false, feedback: helpful }
+            : item,
+        ),
+      )
+    } catch (requestError) {
+      setMessages((current) =>
+        current.map((item, itemIndex) =>
+          itemIndex === index
+            ? {
+                ...item,
+                feedbackSubmitting: false,
+                feedbackError: requestError.message,
+              }
+            : item,
+        ),
+      )
     }
   }
 
@@ -73,7 +110,41 @@ export function AssistantChat({ role, token }) {
               key={`${index}-${message.role}`}
             >
               {message.role === 'assistant' && <Bot size={16} aria-hidden="true" />}
-              <p>{message.content}</p>
+              <div className={message.role === 'assistant' ? 'assistant-reply' : undefined}>
+                <p>{message.content}</p>
+                {message.provider && (
+                  <div className="assistant-feedback">
+                    {message.feedback === undefined ? (
+                      <>
+                        <span>Helpful?</span>
+                        <button
+                          type="button"
+                          aria-label="This answer was helpful"
+                          disabled={message.feedbackSubmitting}
+                          onClick={() => rateMessage(index, true)}
+                        >
+                          <ThumbsUp size={13} />
+                        </button>
+                        <button
+                          type="button"
+                          aria-label="This answer was not helpful"
+                          disabled={message.feedbackSubmitting}
+                          onClick={() => rateMessage(index, false)}
+                        >
+                          <ThumbsDown size={13} />
+                        </button>
+                      </>
+                    ) : (
+                      <span role="status">Thanks for the feedback.</span>
+                    )}
+                    {message.feedbackError && (
+                      <span className="assistant-feedback-error" role="alert">
+                        {message.feedbackError}
+                      </span>
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
           ))}
           {busy && <div className="assistant-thinking" role="status">Thinking…</div>}

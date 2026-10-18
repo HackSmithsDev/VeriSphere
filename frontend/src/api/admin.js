@@ -1,4 +1,4 @@
-import { request } from './axios'
+import { request, requestBlob, requestFile } from './axios'
 
 export const getAdminOverview = (token) =>
   request('/admin/overview', { token })
@@ -11,3 +11,9 @@ export const saveTeacherCourses = (token, teacherId, courseIds) =>
     method: 'PUT',
     body: { course_ids: courseIds },
   })
+
+export const importStudents = (token, workbook) =>
+  requestFile('/admin/students/import', { token, file: workbook })
+
+export const downloadStudentImportTemplate = (token) =>
+  requestBlob('/admin/students/import-template.xlsx', { token })

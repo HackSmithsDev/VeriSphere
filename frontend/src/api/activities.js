@@ -1,4 +1,4 @@
-import { request } from './axios'
+import { request, requestBlob } from './axios'
 import { getApiBase } from './base'
 
 const API_BASE = getApiBase()
@@ -59,6 +59,18 @@ export const reviewActivity = (token, id, review) =>
 export const getStudentPortfolio = (token) =>
   request('/student/portfolio', { token })
 
+export const getStudentResume = (token) =>
+  requestBlob('/student/portfolio/resume', { token })
+
+export const getGithubProfile = (token, username) =>
+  request(`/student/telemetry/github/${encodeURIComponent(username)}`, { token })
+
+export const getLinkedInAuthorizationUrl = (token) =>
+  request('/student/telemetry/linkedin/authorize', { token })
+
+export const getLinkedInProfile = (token) =>
+  request('/student/telemetry/linkedin/profile', { token })
+
 export const enablePortfolioSharing = (token) =>
   request('/student/portfolio/share', { token, method: 'POST' })
 
@@ -73,3 +85,6 @@ export const getSharedEvidenceUrl = (shareToken, evidenceId) =>
 
 export const getActivityReport = (token) =>
   request('/admin/reports/activities', { token })
+
+export const downloadActivityReportWorkbook = (token) =>
+  requestBlob('/admin/reports/activities/export.xlsx', { token })

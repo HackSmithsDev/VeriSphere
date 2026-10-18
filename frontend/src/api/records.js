@@ -1,4 +1,4 @@
-import { request } from './axios'
+import { request, requestBlob } from './axios'
 
 export const getAcademicOptions = (token) =>
   request('/teacher/academic-options', { token })
@@ -14,3 +14,6 @@ export const saveAssessmentMark = (token, entry) =>
 
 export const getAcademicReport = (token) =>
   request('/admin/reports/academics', { token })
+
+export const downloadAcademicReportWorkbook = (token) =>
+  requestBlob('/admin/reports/academics/export.xlsx', { token })

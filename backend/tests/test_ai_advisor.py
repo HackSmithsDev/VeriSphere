@@ -5,6 +5,7 @@ import httpx
 import pytest
 
 from app.services.ai import advisor
+from app.services.ai import integrations
 
 
 def test_student_prompt_uses_learning_coach_instructions() -> None:
@@ -110,7 +111,7 @@ def test_provider_request_uses_configured_api(
     original_client = httpx.AsyncClient
     transport = httpx.MockTransport(respond)
     monkeypatch.setattr(
-        advisor.httpx,
+        integrations.httpx,
         "AsyncClient",
         lambda **kwargs: original_client(transport=transport, **kwargs),
     )

@@ -5,7 +5,7 @@ FROM python:3.13-slim AS builder
 
 WORKDIR /build
 
-# Install build-time dependencies for native C-extensions (asyncpg, bcrypt)
+# Install build tools for native C-extensions (asyncpg, bcrypt, etc.)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     gcc \
@@ -14,7 +14,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY requirements.txt .
 
-# Compile wheels into an isolated user folder
+# Compile wheels into an isolated user directory
 RUN pip install --no-cache-dir --user -r requirements.txt
 
 # ==============================================================================
@@ -24,37 +24,37 @@ FROM python:3.13-slim AS runner
 
 WORKDIR /app
 
-# Install minimal runtime shared libraries (libpq for postgres communication)
+# Install minimal runtime dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq5 \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Create a non-root system user for secure container execution
-RUN groupadd -g 1001 aera && \
-    useradd -u 1001 -g aera -s /bin/bash -m aera && \
+# Create secure non-root system user and configure persistence mount points
+RUN groupadd -g 1001 verisphere && \
+    useradd -u 1001 -g verisphere -s /bin/bash -m verisphere && \
     mkdir -p /app/data /app/uploads && \
-    chown -R aera:aera /app/data /app/uploads
+    chown -R verisphere:verisphere /app
 
-# Copy compiled Python packages from the builder stage
-COPY --from=builder /root/.local /home/aera/.local
-ENV PATH=/home/aera/.local/bin:$PATH
+# Copy compiled Python packages from builder
+COPY --from=builder /root/.local /home/verisphere/.local
+ENV PATH=/home/verisphere/.local/bin:$PATH
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 
-# Copy application source code and migrations
-COPY --chown=aera:aera alembic.ini .
-COPY --chown=aera:aera alembic ./alembic
-COPY --chown=aera:aera app ./app
-COPY --chown=aera:aera main.py .
+# Copy application source code, configurations, and migration files
+COPY --chown=verisphere:verisphere alembic.ini .
+COPY --chown=verisphere:verisphere alembic ./alembic
+COPY --chown=verisphere:verisphere app ./app
+COPY --chown=verisphere:verisphere main.py .
 
-USER aera
+USER verisphere
 
 EXPOSE 8088
 
-# Health check to ensure ASGI server is accepting connections
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD curl -f http://localhost:8088/docs || exit 1
+# Health check to ensure FastAPI is actively serving endpoints
+HEALTHCHECK --interval=15s --timeout=5s --start-period=10s --retries=3 \
+    CMD curl -f http://127.0.0.1:8088/docs || exit 1
 
-# Launch the configured server entry point
-CMD ["python", "main.py"]
+# Apply schema migrations before starting the API.
+CMD ["sh", "-c", "python -m alembic upgrade head && python main.py"]

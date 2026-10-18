@@ -43,6 +43,10 @@ class StudentProfile(Base):
     portfolio_share_token: Mapped[Optional[str]] = mapped_column(
         String(64), unique=True, index=True, nullable=True
     )
+    linkedin_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    linkedin_picture_url: Mapped[Optional[str]] = mapped_column(
+        String(2048), nullable=True
+    )
 
     user: Mapped["User"] = relationship(back_populates="student_profile")
     course: Mapped["Course"] = relationship(back_populates="students")

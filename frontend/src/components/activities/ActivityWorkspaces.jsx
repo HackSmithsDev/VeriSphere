@@ -1,12 +1,18 @@
 import { useEffect, useState } from 'react'
+import { Globe } from 'lucide-react'
 import {
   disablePortfolioSharing,
+  downloadActivityReportWorkbook,
   enablePortfolioSharing,
   getActivityReport,
+  getGithubProfile,
+  getLinkedInAuthorizationUrl,
+  getLinkedInProfile,
   getPendingActivities,
   getSharedPortfolio,
   getStudentActivities,
   getStudentPortfolio,
+  getStudentResume,
   reviewActivity,
   submitStudentActivity,
   updateStudentActivity,
@@ -14,7 +20,7 @@ import {
   getSharedEvidenceUrl,
 } from '../../api/activities'
 import { ActionButton } from '../ui/ActionButton'
-import { getAcademicReport } from '../../api/records'
+import { downloadAcademicReportWorkbook, getAcademicReport } from '../../api/records'
 import { EvidenceLink } from '../evidence/EvidenceLink'
 
 const categories = [
@@ -37,6 +43,15 @@ function csvCell(value) {
   const text = String(value)
   const safeText = /^[\s]*[=+\-@]/.test(text) ? `'${text}` : text
   return `"${safeText.replaceAll('"', '""')}"`
+}
+
+function saveBlob(blob, filename) {
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  link.click()
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 
 function ErrorMessage({ message }) {
@@ -244,6 +259,11 @@ export function PortfolioWorkspace({ token }) {
   const [portfolio, setPortfolio] = useState(null)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  const [resumeBusy, setResumeBusy] = useState(false)
+  const [githubBusy, setGithubBusy] = useState(false)
+  const [githubProfile, setGithubProfile] = useState(null)
+  const [linkedInBusy, setLinkedInBusy] = useState(false)
+  const [linkedInProfile, setLinkedInProfile] = useState(null)
 
   useEffect(() => {
     let cancelled = false
@@ -253,6 +273,20 @@ export function PortfolioWorkspace({ token }) {
           setPortfolio(data)
           setError('')
         }
+      })
+      .catch((requestError) => {
+        if (!cancelled) setError(requestError.message)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [token])
+
+  useEffect(() => {
+    let cancelled = false
+    getLinkedInProfile(token)
+      .then((data) => {
+        if (!cancelled) setLinkedInProfile(data)
       })
       .catch((requestError) => {
         if (!cancelled) setError(requestError.message)
@@ -296,6 +330,47 @@ export function PortfolioWorkspace({ token }) {
     }
   }
 
+  const downloadResume = async () => {
+    setResumeBusy(true)
+    setError('')
+    try {
+      saveBlob(await getStudentResume(token), 'verisphere-resume.html')
+    } catch (requestError) {
+      setError(requestError.message)
+    } finally {
+      setResumeBusy(false)
+    }
+  }
+
+  const loadGithubProfile = async (event) => {
+    event.preventDefault()
+    const username = new FormData(event.currentTarget).get('github_username')?.toString().trim()
+    if (!username || githubBusy) return
+    setGithubBusy(true)
+    setError('')
+    try {
+      setGithubProfile(await getGithubProfile(token, username))
+    } catch (requestError) {
+      setGithubProfile(null)
+      setError(requestError.message)
+    } finally {
+      setGithubBusy(false)
+    }
+  }
+
+  const connectLinkedIn = async () => {
+    setLinkedInBusy(true)
+    setError('')
+    try {
+      const { authorization_url: authorizationUrl } =
+        await getLinkedInAuthorizationUrl(token)
+      window.location.assign(authorizationUrl)
+    } catch (requestError) {
+      setError(requestError.message)
+      setLinkedInBusy(false)
+    }
+  }
+
   return (
     <section>
       <div className="page-heading">
@@ -311,7 +386,46 @@ export function PortfolioWorkspace({ token }) {
           <div className="panel portfolio-share">
             <div><strong>{portfolio.share_enabled ? 'Public link is enabled' : 'Your portfolio is private'}</strong><p className="muted">{portfolio.share_enabled ? 'Anyone with this link can see verified items. You can revoke access at any time.' : 'Enable a secure link to share verified achievements with employers or admissions teams.'}</p></div>
             <ActionButton onClick={toggleSharing} disabled={busy}>{busy ? 'Updating…' : portfolio.share_enabled ? 'Revoke link' : 'Create share link'}</ActionButton>
+            <button className="button button-secondary" onClick={downloadResume} disabled={resumeBusy}>
+              {resumeBusy ? 'Preparing resume…' : 'Download resume'}
+            </button>
             {shareUrl && <div className="share-url"><a href={shareUrl} target="_blank" rel="noreferrer">{shareUrl}</a><button className="text-button" onClick={copyShareUrl}>Copy link</button></div>}
+          </div>
+          <form className="panel portfolio-share" onSubmit={loadGithubProfile}>
+            <div>
+              <strong>Optional GitHub profile stats</strong>
+              <p className="muted">Fetch public profile counts from GitHub. Your username is not added to your profile; the public result may be temporarily cached for 15 minutes and is not verified evidence.</p>
+            </div>
+            <label>
+              GitHub username
+              <input name="github_username" maxLength="39" autoComplete="off" placeholder="your-github-username" />
+            </label>
+            <button className="button button-secondary" type="submit" disabled={githubBusy}>
+              {githubBusy ? 'Loading…' : 'Fetch public stats'}
+            </button>
+            {githubProfile && (
+              <div className="share-url">
+                <strong>{githubProfile.name || githubProfile.login}</strong>
+                <span>{githubProfile.public_repos} public repositories</span>
+                <span>{githubProfile.followers} followers</span>
+                <a href={githubProfile.html_url} target="_blank" rel="noreferrer">View GitHub profile</a>
+              </div>
+            )}
+          </form>
+          <div className="panel portfolio-share">
+            <div>
+              <strong>LinkedIn profile</strong>
+              <p className="muted">Connect your LinkedIn account with consent. VeriSphere stores your display name and profile photo only; OAuth tokens are not retained.</p>
+            </div>
+            {linkedInProfile?.connected && (
+              <div className="share-url">
+                {linkedInProfile.picture_url && <img className="linkedin-avatar" src={linkedInProfile.picture_url} alt="" width="40" height="40" referrerPolicy="no-referrer" />}
+                <span>{linkedInProfile.name || 'Profile connected'}</span>
+              </div>
+            )}
+            <button className="button button-secondary" type="button" onClick={connectLinkedIn} disabled={linkedInBusy}>
+              <Globe size={16} />{linkedInBusy ? 'Connecting…' : linkedInProfile?.connected ? 'Reconnect LinkedIn' : 'Connect LinkedIn'}
+            </button>
           </div>
           <PortfolioContents portfolio={portfolio} token={token} shareToken={shareToken} />
         </>
@@ -359,6 +473,7 @@ export function ActivityReports({ token }) {
   const [report, setReport] = useState(null)
   const [academicReport, setAcademicReport] = useState(null)
   const [error, setError] = useState('')
+  const [downloading, setDownloading] = useState(false)
 
   useEffect(() => {
     Promise.all([getActivityReport(token), getAcademicReport(token)])
@@ -399,11 +514,36 @@ export function ActivityReports({ token }) {
     window.setTimeout(() => URL.revokeObjectURL(url), 1000)
   }
 
+  const downloadWorkbook = async (type) => {
+    setDownloading(true)
+    setError('')
+    try {
+      const blob = type === 'activities'
+        ? await downloadActivityReportWorkbook(token)
+        : await downloadAcademicReportWorkbook(token)
+      saveBlob(blob, `verisphere-${type}.xlsx`)
+    } catch (requestError) {
+      setError(requestError.message)
+    } finally {
+      setDownloading(false)
+    }
+  }
+
   return (
     <section>
       <div className="page-heading">
         <div><span className="eyebrow">INSTITUTIONAL REPORTING</span><h1>Activity analytics</h1><p className="muted">A consolidated view of recorded achievements and verification status for internal review and accreditation preparation.</p></div>
-        {report && academicReport && <button className="button button-secondary" onClick={downloadCsv}>Download CSV</button>}
+        {report && academicReport && (
+          <div className="report-download-actions">
+            <button className="button button-secondary" onClick={downloadCsv}>Download CSV</button>
+            <button className="button button-secondary" disabled={downloading} onClick={() => downloadWorkbook('activities')}>
+              {downloading ? 'Preparing…' : 'Download activities XLSX'}
+            </button>
+            <button className="button button-secondary" disabled={downloading} onClick={() => downloadWorkbook('academics')}>
+              {downloading ? 'Preparing…' : 'Download academics XLSX'}
+            </button>
+          </div>
+        )}
       </div>
       <ErrorMessage message={error} />
       {report && (

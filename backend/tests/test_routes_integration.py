@@ -1,12 +1,18 @@
 import asyncio
 from collections.abc import AsyncGenerator
+from io import BytesIO
+from urllib.parse import parse_qs, urlparse
 
 import httpx
 from fastapi import FastAPI
+from openpyxl import Workbook, load_workbook
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
 from app.api.router import router as api_router
+from app.api.v1 import admin as admin_api
+from app.api.v1 import student as student_api
+from app.api.v1 import teacher as teacher_api
 from app.api.v1 import evidence as evidence_api
 from app.core.security import create_access_token, hash_password
 from app.db.base import Base
@@ -22,6 +28,45 @@ def test_routes_cover_student_teacher_admin_and_public_flows(
     monkeypatch.setattr(advisor, "GROQ_API_KEY", "")
     monkeypatch.setattr(advisor, "GEMINI_API_KEY", "")
     monkeypatch.setattr(evidence_api, "UPLOAD_DIR", tmp_path)
+    review_notifications: list[tuple[str, str, str, str, str | None]] = []
+    student_invitations: list[tuple[str, str, str]] = []
+
+    async def record_student_invitation(
+        email: str, name: str, invitation_url: str
+    ) -> None:
+        student_invitations.append((email, name, invitation_url))
+
+    monkeypatch.setattr(admin_api, "ensure_email_configured", lambda: None)
+    monkeypatch.setattr(
+        admin_api, "dispatch_student_invitation", record_student_invitation
+    )
+
+    async def record_review_notification(
+        email: str,
+        name: str,
+        title: str,
+        decision: str,
+        feedback: str | None,
+    ) -> None:
+        review_notifications.append((email, name, title, decision, feedback))
+
+    monkeypatch.setattr(
+        teacher_api, "dispatch_review_notification", record_review_notification
+    )
+
+    async def github_profile(username: str) -> dict:
+        assert username == "sample-student"
+        return {
+            "login": username,
+            "name": "Sample Student",
+            "bio": None,
+            "public_repos": 3,
+            "followers": 2,
+            "following": 1,
+            "html_url": "https://github.com/sample-student",
+        }
+
+    monkeypatch.setattr(student_api, "get_github_profile", github_profile)
 
     async def exercise_routes() -> None:
         engine = create_async_engine(
@@ -127,6 +172,7 @@ def test_routes_cover_student_teacher_admin_and_public_flows(
             )
             assert response.status_code == 201
             student_token = response.json()["access_token"]
+            student_id = response.json()["user"]["id"]
             assert response.json()["user"]["email"] == "student@example.com"
             student_headers = {"Authorization": f"Bearer {student_token}"}
 
@@ -165,6 +211,47 @@ def test_routes_cover_student_teacher_admin_and_public_flows(
             )
             assert response.status_code == 200
             assert response.json()["stats"]["total_milestones"] == 2
+            response = await client.get(
+                "/api/v1/student/telemetry/github/sample-student",
+                headers=student_headers,
+            )
+            assert response.status_code == 200
+            assert response.json()["public_repos"] == 3
+
+            monkeypatch.setattr(
+                student_api, "read_authorization_state", lambda state: student_id
+            )
+
+            async def linked_in_profile(code: str) -> dict[str, str | None]:
+                assert code == "test-code"
+                return {
+                    "sub": "linkedin-id",
+                    "name": "Sample Student",
+                    "picture": "https://media.example.com/profile.jpg",
+                    "given_name": "Sample",
+                    "family_name": "Student",
+                }
+
+            monkeypatch.setattr(
+                student_api, "exchange_code_for_profile", linked_in_profile
+            )
+            response = await client.get(
+                "/api/v1/student/telemetry/linkedin/callback",
+                params={"code": "test-code", "state": "signed-state"},
+                follow_redirects=False,
+            )
+            assert response.status_code == 303
+            assert "linkedin=connected" in response.headers["location"]
+            response = await client.get(
+                "/api/v1/student/telemetry/linkedin/profile",
+                headers=student_headers,
+            )
+            assert response.status_code == 200
+            assert response.json() == {
+                "name": "Sample Student",
+                "picture_url": "https://media.example.com/profile.jpg",
+                "connected": True,
+            }
 
             response = await client.get(
                 "/api/v1/student/milestones",
@@ -299,6 +386,7 @@ def test_routes_cover_student_teacher_admin_and_public_flows(
                 headers=student_headers,
             )
             assert response.status_code == 403
+
             response = await client.get(
                 "/api/v1/teacher/academic-options",
                 headers=teacher_headers,
@@ -450,6 +538,13 @@ def test_routes_cover_student_teacher_admin_and_public_flows(
             )
             assert response.status_code == 200
             assert response.json()["status"] == "verified"
+            assert review_notifications[-1] == (
+                "student@example.com",
+                "Sam Student",
+                "Software engineering internship",
+                "verified",
+                "Evidence checked.",
+            )
             response = await client.put(
                 f"/api/v1/student/activities/{activity['id']}",
                 headers=student_headers,
@@ -474,6 +569,16 @@ def test_routes_cover_student_teacher_admin_and_public_flows(
             assert "email" not in response.json()["student"]
             assert response.json()["academic_milestones"][0]["title"] == "Foundations"
             assert response.json()["share_enabled"] is False
+            response = await client.get(
+                "/api/v1/student/portfolio/resume",
+                headers=student_headers,
+            )
+            assert response.status_code == 200
+            assert response.headers["content-disposition"].endswith(
+                'filename="verisphere-resume.html"'
+            )
+            assert "Foundations" in response.text
+            assert "Software engineering internship" in response.text
             response = await client.post(
                 "/api/v1/student/portfolio/share",
                 headers=student_headers,
@@ -486,6 +591,11 @@ def test_routes_cover_student_teacher_admin_and_public_flows(
             assert response.json()["activities"][0]["title"] == (
                 "Software engineering internship"
             )
+            response = await client.get(
+                f"/api/v1/portfolios/{share_token}/resume"
+            )
+            assert response.status_code == 200
+            assert "Software engineering internship" in response.text
             response = await client.get(
                 f"/api/v1/student/evidence/shared/{share_token}/{activity_evidence_id}",
             )
@@ -500,6 +610,28 @@ def test_routes_cover_student_teacher_admin_and_public_flows(
             assert response.json()["verified_activities"] == 1
             assert response.json()["by_category"] == [
                 {"category": "internship", "count": 1}
+            ]
+            response = await client.get(
+                "/api/v1/admin/reports/activities/export.xlsx",
+                headers=admin_headers,
+            )
+            assert response.status_code == 200
+            assert response.headers["content-type"].startswith(
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+            activity_workbook = load_workbook(BytesIO(response.content), read_only=True)
+            assert activity_workbook.sheetnames == ["Summary", "Categories", "Statuses"]
+            assert activity_workbook["Categories"]["A2"].value == "internship"
+            response = await client.get(
+                "/api/v1/admin/reports/academics/export.xlsx",
+                headers=admin_headers,
+            )
+            assert response.status_code == 200
+            academic_workbook = load_workbook(BytesIO(response.content), read_only=True)
+            assert academic_workbook.sheetnames == [
+                "Summary",
+                "Attendance",
+                "Assessments",
             ]
             response = await client.get(
                 "/api/v1/admin/reports/activities",
@@ -644,6 +776,97 @@ def test_routes_cover_student_teacher_admin_and_public_flows(
                 json={"messages": [{"role": "user", "content": "What next?"}]},
             )
             assert response.status_code == 403
+            response = await client.post(
+                "/api/v1/assistant/feedback",
+                headers=student_headers,
+                json={"provider": "Groq", "helpful": True},
+            )
+            assert response.status_code == 201
+            response = await client.get(
+                "/api/v1/admin/assistant/feedback",
+                headers=admin_headers,
+            )
+            assert response.status_code == 200
+            assert response.json()["providers"] == [
+                {
+                    "provider": "Groq",
+                    "responses_rated": 1,
+                    "helpful": 1,
+                    "helpfulness_percentage": 100.0,
+                }
+            ]
+
+            response = await client.get(
+                "/api/v1/admin/students/import-template.xlsx",
+                headers=admin_headers,
+            )
+            assert response.status_code == 200
+            template = load_workbook(BytesIO(response.content), read_only=True)
+            assert tuple(cell.value for cell in template.active[1]) == (
+                "email",
+                "first_name",
+                "last_name",
+                "course_id",
+            )
+            template.close()
+
+            workbook = Workbook()
+            workbook.active.append(
+                ["email", "first_name", "last_name", "course_id"]
+            )
+            workbook.active.append(
+                ["new-student@example.com", "New", "Student", course_id]
+            )
+            workbook_bytes = BytesIO()
+            workbook.save(workbook_bytes)
+            workbook.close()
+            response = await client.post(
+                "/api/v1/admin/students/import",
+                headers=admin_headers,
+                files={
+                    "file": (
+                        "students.xlsx",
+                        workbook_bytes.getvalue(),
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    )
+                },
+            )
+            assert response.status_code == 202
+            assert response.json() == {"invited": 1}
+            assert student_invitations[0][:2] == (
+                "new-student@example.com",
+                "New Student",
+            )
+            invitation_token = parse_qs(
+                urlparse(student_invitations[0][2]).query
+            )["token"][0]
+            response = await client.post(
+                "/api/v1/auth/register",
+                json={
+                    "email": "new-student@example.com",
+                    "password": "another-password-123",
+                    "first_name": "New",
+                    "last_name": "Student",
+                    "course_id": course_id,
+                },
+            )
+            assert response.status_code == 409
+            response = await client.post(
+                "/api/v1/auth/invitations/accept",
+                json={
+                    "token": invitation_token,
+                    "password": "new-student-password",
+                },
+            )
+            assert response.status_code == 201
+            response = await client.post(
+                "/api/v1/auth/invitations/accept",
+                json={
+                    "token": invitation_token,
+                    "password": "another-password-123",
+                },
+            )
+            assert response.status_code == 409
 
         await engine.dispose()
 

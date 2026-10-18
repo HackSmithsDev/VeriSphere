@@ -1,4 +1,15 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from datetime import UTC, datetime
+
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    File,
+    HTTPException,
+    Response,
+    UploadFile,
+    status,
+)
 from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -7,6 +18,8 @@ from app.core.dependencies import require_roles
 from app.core.security import hash_password
 from app.db.models.academic import Course, Subject
 from app.db.models.activity import ActivityStatus, StudentActivity
+from app.db.models.ai_calibration import AssistantFeedback
+from app.db.models.invitation import StudentInvitation
 from app.db.models.milestone import MilestoneStatus, StudentMilestone
 from app.db.models.records import AssessmentMark, AttendanceRecord, AttendanceStatus
 from app.db.models.user import StudentProfile, TeacherProfile, User, UserRole
@@ -16,10 +29,21 @@ from app.schemas.academic import (
     TeacherCourseAssignment,
     TeacherCreate,
 )
+from app.services.excel import export_report_workbook
+from app.services.excel.exporter import XLSX_MEDIA_TYPE
+from app.services.excel import (
+    MAX_STUDENT_IMPORT_ROWS,
+    SpreadsheetValidationError,
+    build_student_import_template,
+    parse_student_workbook,
+)
+from app.services.email import dispatch_student_invitation, ensure_email_configured
+from app.services.student_invitations import new_invitation
 
 
 router = APIRouter(prefix="/admin", tags=["administration"])
 admin_only = require_roles("admin")
+MAX_STUDENT_IMPORT_SIZE = 5 * 1024 * 1024
 
 
 @router.get("/overview")
@@ -125,6 +149,118 @@ async def create_teacher(
     return {"id": user.id, "email": user.email, "role": user.role.value}
 
 
+@router.post("/students/import", status_code=status.HTTP_202_ACCEPTED)
+async def import_students(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    _: User = Depends(admin_only),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, int]:
+    if not file.filename or not file.filename.lower().endswith(".xlsx"):
+        await file.close()
+        raise HTTPException(status_code=415, detail="Upload an .xlsx workbook.")
+    try:
+        content = await file.read(MAX_STUDENT_IMPORT_SIZE + 1)
+    finally:
+        await file.close()
+    if len(content) > MAX_STUDENT_IMPORT_SIZE:
+        raise HTTPException(status_code=413, detail="Workbook must be 5 MB or smaller.")
+    try:
+        students = parse_student_workbook(content)
+    except SpreadsheetValidationError as error:
+        raise HTTPException(status_code=422, detail=error.errors) from error
+    if len(students) > MAX_STUDENT_IMPORT_ROWS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Import is limited to {MAX_STUDENT_IMPORT_ROWS} students.",
+        )
+    try:
+        ensure_email_configured()
+    except RuntimeError as error:
+        raise HTTPException(
+            status_code=503,
+            detail="Configure SMTP before importing and inviting students.",
+        ) from error
+
+    course_ids = {student.course_id for student in students}
+    existing_courses = set(
+        await db.scalars(select(Course.id).where(Course.id.in_(course_ids)))
+    )
+    invalid_course_rows = [
+        f"Row {student.row_number}: course_id {student.course_id} does not exist."
+        for student in students
+        if student.course_id not in existing_courses
+    ]
+    if invalid_course_rows:
+        raise HTTPException(status_code=422, detail=invalid_course_rows)
+
+    emails = [student.email for student in students]
+    existing_users = set(
+        await db.scalars(select(User.email).where(User.email.in_(emails)))
+    )
+    if existing_users:
+        duplicates = [
+            f"Row {student.row_number}: an account already exists for {student.email}."
+            for student in students
+            if student.email in existing_users
+        ]
+        raise HTTPException(status_code=409, detail=duplicates)
+
+    existing_invitations = {
+        invitation.email: invitation
+        for invitation in await db.scalars(
+            select(StudentInvitation).where(StudentInvitation.email.in_(emails))
+        )
+    }
+    now = datetime.now(UTC).replace(tzinfo=None)
+    active_duplicates = [
+        f"Row {student.row_number}: an active invitation already exists for {student.email}."
+        for student in students
+        if (
+            (invitation := existing_invitations.get(student.email)) is not None
+            and invitation.accepted_at is None
+            and invitation.expires_at > now
+        )
+    ]
+    if active_duplicates:
+        raise HTTPException(status_code=409, detail=active_duplicates)
+
+    for student in students:
+        invitation, link = new_invitation(student)
+        previous = existing_invitations.get(student.email)
+        if previous is None:
+            db.add(invitation)
+        else:
+            previous.course_id = invitation.course_id
+            previous.first_name = invitation.first_name
+            previous.last_name = invitation.last_name
+            previous.token_hash = invitation.token_hash
+            previous.expires_at = invitation.expires_at
+            previous.accepted_at = None
+        background_tasks.add_task(
+            dispatch_student_invitation,
+            student.email,
+            f"{student.first_name} {student.last_name}",
+            link,
+        )
+    await db.flush()
+    await db.commit()
+    return {"invited": len(students)}
+
+
+@router.get("/students/import-template.xlsx")
+async def student_import_template(
+    _: User = Depends(admin_only),
+) -> Response:
+    return Response(
+        content=build_student_import_template(),
+        media_type=XLSX_MEDIA_TYPE,
+        headers={
+            "Content-Disposition": 'attachment; filename="verisphere-student-import-template.xlsx"'
+        },
+    )
+
+
 @router.put("/teachers/{teacher_id}/courses")
 async def assign_teacher_courses(
     teacher_id: int,
@@ -158,6 +294,10 @@ async def assign_teacher_courses(
 async def activity_report(
     _: User = Depends(admin_only), db: AsyncSession = Depends(get_db)
 ) -> dict:
+    return await build_activity_report(db)
+
+
+async def build_activity_report(db: AsyncSession) -> dict:
     total = await db.scalar(select(func.count(StudentActivity.id))) or 0
     verified = (
         await db.scalar(
@@ -204,6 +344,10 @@ async def activity_report(
 async def academic_report(
     _: User = Depends(admin_only), db: AsyncSession = Depends(get_db)
 ) -> dict:
+    return await build_academic_report(db)
+
+
+async def build_academic_report(db: AsyncSession) -> dict:
     attendance_rows = await db.execute(
         select(
             Course.name,
@@ -277,4 +421,60 @@ async def academic_report(
         "assessments": assessments,
         "students": await db.scalar(select(func.count(StudentProfile.id))) or 0,
         "subjects": await db.scalar(select(func.count(Subject.id))) or 0,
+    }
+
+
+@router.get("/reports/activities/export.xlsx")
+async def export_activity_report(
+    _: User = Depends(admin_only), db: AsyncSession = Depends(get_db)
+) -> Response:
+    report = await build_activity_report(db)
+    return Response(
+        content=export_report_workbook("activities", report),
+        media_type=XLSX_MEDIA_TYPE,
+        headers={
+            "Content-Disposition": 'attachment; filename="verisphere-activities.xlsx"'
+        },
+    )
+
+
+@router.get("/reports/academics/export.xlsx")
+async def export_academic_report(
+    _: User = Depends(admin_only), db: AsyncSession = Depends(get_db)
+) -> Response:
+    report = await build_academic_report(db)
+    return Response(
+        content=export_report_workbook("academics", report),
+        media_type=XLSX_MEDIA_TYPE,
+        headers={
+            "Content-Disposition": 'attachment; filename="verisphere-academics.xlsx"'
+        },
+    )
+
+
+@router.get("/assistant/feedback")
+async def assistant_feedback_report(
+    _: User = Depends(admin_only), db: AsyncSession = Depends(get_db)
+) -> dict:
+    rows = await db.execute(
+        select(
+            AssistantFeedback.provider,
+            func.count(AssistantFeedback.id),
+            func.sum(case((AssistantFeedback.helpful.is_(True), 1), else_=0)),
+        )
+        .group_by(AssistantFeedback.provider)
+        .order_by(AssistantFeedback.provider)
+    )
+    return {
+        "providers": [
+            {
+                "provider": provider,
+                "responses_rated": count,
+                "helpful": helpful or 0,
+                "helpfulness_percentage": round((helpful or 0) * 100 / count, 1)
+                if count
+                else None,
+            }
+            for provider, count, helpful in rows
+        ]
     }

@@ -29,10 +29,18 @@ import {
   getAdminOverview,
   getAdminUsers,
   createTeacher,
+  downloadStudentImportTemplate,
+  importStudents,
   saveTeacherCourses,
 } from './api/admin'
 import { AssistantChat } from './components/assistant/AssistantChat'
-import { getCurrentUser, login, logout, register } from './api/auth'
+import {
+  acceptStudentInvitation,
+  getCurrentUser,
+  login,
+  logout,
+  register,
+} from './api/auth'
 import { getAnnouncements, getCourses } from './api/guest'
 import { uploadEvidence } from './api/activities'
 import { getStudentDashboard, getMilestones, submitMilestone } from './api/student'
@@ -79,14 +87,19 @@ function WorkspaceApp() {
   const [token, setToken] = useState(() => localStorage.getItem(TOKEN_KEY))
   const [user, setUser] = useState(null)
   const [workspace, setWorkspace] = useState({})
-  const [page, setPage] = useState('overview')
+  const hasLinkedInReturn = new URLSearchParams(window.location.search).get('linkedin') === 'connected'
+  const [page, setPage] = useState(() => hasLinkedInReturn ? 'portfolio' : 'overview')
   const [authMode, setAuthMode] = useState(null)
   const [authBusy, setAuthBusy] = useState(false)
   const [loading, setLoading] = useState(Boolean(token))
   const [error, setError] = useState('')
-  const [notice, setNotice] = useState('')
+  const [notice, setNotice] = useState(() => hasLinkedInReturn ? 'LinkedIn profile connected.' : '')
   const [courses, setCourses] = useState([])
   const [activeMilestone, setActiveMilestone] = useState(null)
+
+  useEffect(() => {
+    if (hasLinkedInReturn) window.history.replaceState({}, '', window.location.pathname)
+  }, [hasLinkedInReturn])
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const [searchTerm, setSearchTerm] = useState('')
 
@@ -443,6 +456,16 @@ function WorkspaceApp() {
             <Accounts
               users={workspace.users || []}
               searchTerm={searchTerm}
+              onImportStudents={async (file) => {
+                const result = await importStudents(token, file)
+                await refreshWorkspace(token, user.role)
+                setNotice(`${result.invited} student invitation${result.invited === 1 ? '' : 's'} queued.`)
+                return result
+              }}
+              onDownloadImportTemplate={async () => {
+                const blob = await downloadStudentImportTemplate(token)
+                triggerBlobDownload(blob, 'verisphere-student-import-template.xlsx')
+              }}
               onCreateTeacher={createFaculty}
               onSaveTeacherCourses={async (teacherId, courseIds) => {
                 try {
@@ -487,7 +510,79 @@ function WorkspaceApp() {
 
 function App() {
   const match = window.location.pathname.match(/^\/portfolio\/([A-Za-z0-9_-]+)\/?$/)
-  return match ? <SharedPortfolioPage shareToken={match[1]} /> : <WorkspaceApp />
+  if (match) return <SharedPortfolioPage shareToken={match[1]} />
+  if (window.location.pathname.replace(/\/+$/, '') === '/set-password') {
+    return <SetPasswordPage />
+  }
+  return <WorkspaceApp />
+}
+
+function SetPasswordPage() {
+  const invitationToken = new URLSearchParams(window.location.search).get('token') || ''
+  const [error, setError] = useState('')
+  const [complete, setComplete] = useState(false)
+  const [busy, setBusy] = useState(false)
+
+  const submitPassword = async (event) => {
+    event.preventDefault()
+    const form = new FormData(event.currentTarget)
+    const password = form.get('password')?.toString() || ''
+    const confirmation = form.get('confirm_password')?.toString() || ''
+    if (password !== confirmation) {
+      setError('The passwords do not match.')
+      return
+    }
+    setError('')
+    setBusy(true)
+    try {
+      await acceptStudentInvitation({ token: invitationToken, password })
+      setComplete(true)
+    } catch (requestError) {
+      setError(requestError.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <main className="auth-screen invitation-screen">
+      <section className="auth-main">
+        <div className="auth-form-wrap">
+          <a className="brand" href="/"><span className="brand-mark"><ShieldCheck size={22} /></span><span>VeriSphere</span></a>
+          <span className="eyebrow">STUDENT ACCOUNT INVITATION</span>
+          <h2>{complete ? 'Your account is ready' : 'Set your password'}</h2>
+          {complete ? (
+            <>
+              <p className="muted">You can now sign in with your invited email address and new password.</p>
+              <a className="button button-primary button-full" href="/" onClick={logout}>Go to sign in <ArrowRight size={16} /></a>
+            </>
+          ) : (
+            <>
+              <p className="muted">Choose a password to activate your student account.</p>
+              {error && <div className="alert alert-error" role="alert">{error}</div>}
+              {!invitationToken && <div className="alert alert-error" role="alert">This invitation link is missing its token.</div>}
+              <form className="auth-form" onSubmit={submitPassword}>
+                <label>New password<input name="password" type="password" autoComplete="new-password" required minLength="8" maxLength="128" /></label>
+                <label>Confirm password<input name="confirm_password" type="password" autoComplete="new-password" required minLength="8" maxLength="128" /></label>
+                <ActionButton className="button-full" type="submit" disabled={busy || !invitationToken}>
+                  {busy ? 'Setting password…' : 'Activate account'} <ArrowRight size={16} />
+                </ActionButton>
+              </form>
+            </>
+          )}
+        </div>
+      </section>
+    </main>
+  )
+}
+
+function triggerBlobDownload(blob, filename) {
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  link.click()
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 
 function Landing({ onSignIn, onSignUp, error }) {
@@ -607,11 +702,17 @@ function ReviewQueue({ submissions, searchTerm, onReview, token }) {
 function Accounts({
   users,
   searchTerm,
+  onImportStudents,
+  onDownloadImportTemplate,
   onCreateTeacher,
   onSaveTeacherCourses,
 }) {
   const [courses, setCourses] = useState([])
   const [courseError, setCourseError] = useState('')
+  const [importError, setImportError] = useState('')
+  const [importNotice, setImportNotice] = useState('')
+  const [importBusy, setImportBusy] = useState(false)
+  const [templateBusy, setTemplateBusy] = useState(false)
   const filtered = users.filter((item) =>
     `${item.email} ${item.role} ${(item.courses || []).map((course) => course.name).join(' ')}`
       .toLowerCase()
@@ -631,6 +732,37 @@ function Accounts({
       (option) => Number(option.value),
     )
     void onSaveTeacherCourses(teacherId, selectedCourses)
+  }
+
+  const submitStudentWorkbook = async (event) => {
+    event.preventDefault()
+    const form = event.currentTarget
+    const file = form.elements.workbook.files[0]
+    if (!file || importBusy) return
+    setImportError('')
+    setImportNotice('')
+    setImportBusy(true)
+    try {
+      const result = await onImportStudents(file)
+      setImportNotice(`${result.invited} student invitation${result.invited === 1 ? '' : 's'} queued for email.`)
+      form.reset()
+    } catch (requestError) {
+      setImportError(requestError.message)
+    } finally {
+      setImportBusy(false)
+    }
+  }
+
+  const downloadTemplate = async () => {
+    setTemplateBusy(true)
+    setImportError('')
+    try {
+      await onDownloadImportTemplate()
+    } catch (requestError) {
+      setImportError(requestError.message)
+    } finally {
+      setTemplateBusy(false)
+    }
   }
 
   return (
@@ -715,6 +847,24 @@ function Accounts({
             </button>
           </form>
         </div>
+      </div>
+      <div className="panel faculty-panel student-import-panel">
+        <div className="feature-icon feature-violet"><Users size={18} /></div>
+        <h2>Invite students from a workbook</h2>
+        <p>Upload an .xlsx file with email, first_name, last_name, and course_id columns. Students receive an expiring link to set their own password. SMTP must be configured.</p>
+        {importError && <div className="alert alert-error" role="alert">{importError}</div>}
+        {importNotice && <div className="alert alert-success" role="status">{importNotice}</div>}
+        <form className="auth-form compact-form" onSubmit={submitStudentWorkbook}>
+          <label>Student workbook<input name="workbook" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required /></label>
+          <div className="record-actions">
+            <button className="button button-secondary" type="button" onClick={downloadTemplate} disabled={templateBusy}>
+              {templateBusy ? 'Preparing template…' : 'Download template'}
+            </button>
+            <button className="button button-primary" type="submit" disabled={importBusy}>
+              {importBusy ? 'Importing…' : 'Import and invite'}
+            </button>
+          </div>
+        </form>
       </div>
     </section>
   )

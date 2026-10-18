@@ -8,4 +8,7 @@ export const register = (details) =>
 
 export const getCurrentUser = (token) => request('/auth/me', { token })
 
+export const acceptStudentInvitation = (details) =>
+  request('/auth/invitations/accept', { method: 'POST', body: details })
+
 export const logout = () => localStorage.removeItem('verisphere_token')

@@ -58,3 +58,8 @@ class TeacherCourseAssignment(BaseModel):
         ):
             raise ValueError("Course IDs must be unique positive integers.")
         return self
+
+
+class StudentInvitationAccept(BaseModel):
+    token: str = Field(min_length=32, max_length=256)
+    password: str = Field(min_length=8, max_length=128)

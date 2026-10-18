@@ -1,16 +1,22 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.dependencies import get_current_user
 from app.db.models.user import User, UserRole
 from app.db.session import get_db
-from app.schemas.assistant import AssistantChatRequest, AssistantChatResponse
+from app.schemas.assistant import (
+    AssistantChatRequest,
+    AssistantChatResponse,
+    AssistantFeedbackRequest,
+    AssistantFeedbackResponse,
+)
 from app.services.ai.advisor import (
     AIProviderError,
     AIProvidersNotConfigured,
     build_learning_context,
     generate_advice,
 )
+from app.services.ai.calibration import record_feedback
 
 
 router = APIRouter(prefix="/assistant", tags=["AI assistant"])
@@ -50,3 +56,27 @@ async def chat(
         ) from error
 
     return AssistantChatResponse(reply=reply, provider=provider)
+
+
+@router.post(
+    "/feedback",
+    response_model=AssistantFeedbackResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def submit_feedback(
+    payload: AssistantFeedbackRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> AssistantFeedbackResponse:
+    if user.role not in {UserRole.STUDENT, UserRole.TEACHER}:
+        raise HTTPException(
+            status_code=403,
+            detail="Assistant feedback is available to students and faculty.",
+        )
+    feedback = await record_feedback(
+        user=user,
+        provider=payload.provider,
+        helpful=payload.helpful,
+        db=db,
+    )
+    return AssistantFeedbackResponse(id=feedback.id)

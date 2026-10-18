@@ -1,4 +1,34 @@
 services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?Set POSTGRES_USER in the root .env file}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the root .env file}
+      POSTGRES_DB: ${POSTGRES_DB:?Set POSTGRES_DB in the root .env file}
+    volumes:
+      - verisphere-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:?Set POSTGRES_USER in the root .env file} -d ${POSTGRES_DB:?Set POSTGRES_DB in the root .env file}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - verisphere-network
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - verisphere-redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - verisphere-network
+
   backend:
     build:
       context: ./backend
@@ -6,25 +36,24 @@ services:
     restart: unless-stopped
     ports:
       - "8088:8088"
+    env_file:
+      - ./backend/.env
     environment:
-      APP_ENV: ${APP_ENV:-development}
       HOST: 0.0.0.0
       PORT: 8088
-      DEBUG: ${DEBUG:-false}
       WORKERS_COUNT: ${WORKERS_COUNT:-1}
-      DATABASE_URL: ${DATABASE_URL:-sqlite+aiosqlite:////app/data/verisphere.db}
-      SECRET_KEY: ${SECRET_KEY:-development-only-change-this-verisphere-key}
-      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-60}
-      FRONTEND_ORIGINS: ${FRONTEND_ORIGINS:-http://localhost:5176,http://127.0.0.1:5176}
-      INITIAL_ADMIN_EMAIL: ${INITIAL_ADMIN_EMAIL:-}
-      INITIAL_ADMIN_PASSWORD: ${INITIAL_ADMIN_PASSWORD:-}
-      GROQ_API_KEY: ${GROQ_API_KEY:-}
-      GROQ_MODEL: ${GROQ_MODEL:-llama-3.3-70b-versatile}
-      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash}
+      APP_ENV: ${APP_ENV:?Set APP_ENV in the root .env file}
+      DEBUG: ${DEBUG:?Set DEBUG in the root .env file}
+      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL in the root .env file}
+      REDIS_URL: redis://redis:6379/0
     volumes:
       - verisphere-data:/app/data
       - verisphere-uploads:/app/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     networks:
       - verisphere-network
 
@@ -41,6 +70,17 @@ services:
     networks:
       - verisphere-network
 
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    profiles: ["tunnel"]
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARED_TUNNEL_TOKEN:-}
+    depends_on:
+      - frontend
+      - backend
+    networks:
+      - verisphere-network
+
 networks:
   verisphere-network:
     driver: bridge
@@ -48,3 +88,5 @@ networks:
 volumes:
   verisphere-data:
   verisphere-uploads:
+  verisphere-postgres:
+  verisphere-redis:

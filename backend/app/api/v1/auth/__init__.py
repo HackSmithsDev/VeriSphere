@@ -1,3 +1,5 @@
+from datetime import UTC, datetime
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -5,10 +7,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.dependencies import get_current_user
 from app.core.security import create_access_token, hash_password, verify_password
 from app.db.models.academic import Chapter, Course, Subject
+from app.db.models.invitation import StudentInvitation
 from app.db.models.milestone import MilestoneStatus, StudentMilestone
 from app.db.models.user import StudentProfile, User, UserRole
 from app.db.session import get_db
 from app.schemas.auth import LoginRequest, RegisterRequest, UserResponse
+from app.schemas.academic import StudentInvitationAccept
+from app.services.student_invitations import (
+    InvitationAccountExists,
+    InvitationAlreadyUsed,
+    InvitationExpired,
+    InvitationNotFound,
+    accept_student_invitation,
+)
 
 
 router = APIRouter(prefix="/auth", tags=["authentication"])
@@ -40,6 +51,19 @@ async def register(
     existing = await db.scalar(select(User.id).where(User.email == email))
     if existing is not None:
         raise HTTPException(status_code=409, detail="An account with this email exists.")
+    now = datetime.now(UTC).replace(tzinfo=None)
+    pending_invitation = await db.scalar(
+        select(StudentInvitation.id).where(
+            StudentInvitation.email == email,
+            StudentInvitation.accepted_at.is_(None),
+            StudentInvitation.expires_at > now,
+        )
+    )
+    if pending_invitation is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="Use the student invitation link to create this account.",
+        )
     course = await db.get(Course, payload.course_id)
     if course is None:
         raise HTTPException(status_code=404, detail="The selected course was not found.")
@@ -112,3 +136,29 @@ async def read_me(
     db: AsyncSession = Depends(get_db),
 ) -> UserResponse:
     return await _user_response(user, db)
+
+
+@router.post("/invitations/accept", status_code=status.HTTP_201_CREATED)
+async def accept_invitation(
+    payload: StudentInvitationAccept,
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, str]:
+    try:
+        await accept_student_invitation(payload.token, payload.password, db)
+    except InvitationNotFound as error:
+        raise HTTPException(
+            status_code=404, detail="Student invitation was not found."
+        ) from error
+    except InvitationAlreadyUsed as error:
+        raise HTTPException(
+            status_code=409, detail="Student invitation has already been used."
+        ) from error
+    except InvitationAccountExists as error:
+        raise HTTPException(
+            status_code=409, detail="An account with this email already exists."
+        ) from error
+    except InvitationExpired as error:
+        raise HTTPException(
+            status_code=410, detail="Student invitation has expired."
+        ) from error
+    return {"message": "Your account is ready. Sign in to continue."}

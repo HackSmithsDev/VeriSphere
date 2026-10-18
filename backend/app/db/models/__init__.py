@@ -9,6 +9,8 @@ from app.db.models.records import (
     AttendanceStatus,
     EvidenceFile,
 )
+from app.db.models.ai_calibration import AssistantFeedback
+from app.db.models.invitation import StudentInvitation
 
 
 __all__ = [
@@ -28,4 +30,6 @@ __all__ = [
     "AttendanceRecord",
     "AttendanceStatus",
     "EvidenceFile",
+    "AssistantFeedback",
+    "StudentInvitation",
 ]

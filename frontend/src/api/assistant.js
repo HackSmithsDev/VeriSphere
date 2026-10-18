@@ -6,3 +6,10 @@ export const chatWithAssistant = (token, messages) =>
     method: 'POST',
     body: { messages },
   })
+
+export const submitAssistantFeedback = (token, provider, helpful) =>
+  request('/assistant/feedback', {
+    token,
+    method: 'POST',
+    body: { provider, helpful },
+  })

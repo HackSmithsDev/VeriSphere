@@ -27,3 +27,39 @@ export async function request(path, { token, method = 'GET', body } = {}) {
   }
   return result
 }
+
+export async function requestBlob(path, { token } = {}) {
+  const headers = new Headers()
+  if (token) headers.set('Authorization', `Bearer ${token}`)
+
+  const response = await fetch(`${API_BASE}${path}`, { headers })
+  if (!response.ok) {
+    const result = await response.json().catch(() => null)
+    throw new Error(result?.detail || `Request failed (${response.status})`)
+  }
+  return response.blob()
+}
+
+export async function requestFile(path, { token, file, field = 'file' } = {}) {
+  const headers = new Headers({ Accept: 'application/json' })
+  if (token) headers.set('Authorization', `Bearer ${token}`)
+  const body = new FormData()
+  body.set(field, file)
+  const response = await fetch(`${API_BASE}${path}`, {
+    method: 'POST',
+    headers,
+    body,
+  })
+  const result = await response.json().catch(() => null)
+  if (!response.ok) {
+    const detail = result?.detail
+    throw new Error(
+      typeof detail === 'string'
+        ? detail
+        : Array.isArray(detail)
+          ? detail.map((item) => typeof item === 'string' ? item : item.msg).join(', ')
+          : `Request failed (${response.status})`,
+    )
+  }
+  return result
+}

@@ -21,3 +21,13 @@ class AssistantChatRequest(BaseModel):
 class AssistantChatResponse(BaseModel):
     reply: str
     provider: Literal["Groq", "Gemini"]
+
+
+class AssistantFeedbackRequest(BaseModel):
+    provider: Literal["Groq", "Gemini"]
+    helpful: bool
+
+
+class AssistantFeedbackResponse(BaseModel):
+    id: int
+    recorded: bool = True

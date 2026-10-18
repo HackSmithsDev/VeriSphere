@@ -1,6 +1,6 @@
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -11,6 +11,7 @@ from app.db.models.activity import ActivityStatus, StudentActivity
 from app.db.models.milestone import MilestoneStatus, StudentMilestone
 from app.db.models.user import StudentProfile, User
 from app.db.session import get_db
+from app.services.email import dispatch_review_notification
 from app.schemas.activity import (
     ActivityResponse,
     ActivityReview,
@@ -106,6 +107,7 @@ async def list_submissions(
 async def review_submission(
     milestone_id: int,
     review: MilestoneReview,
+    background_tasks: BackgroundTasks,
     user: User = Depends(teacher_only),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
@@ -129,6 +131,15 @@ async def review_submission(
         raise HTTPException(
             status_code=409, detail="This submission is no longer awaiting review."
         )
+    recipient = await db.execute(
+        select(StudentProfile, User)
+        .join(User, StudentProfile.user_id == User.id)
+        .where(StudentProfile.id == milestone.student_id)
+    )
+    student_profile, student_user = recipient.one()
+    chapter_title = await db.scalar(
+        select(Chapter.title).where(Chapter.id == milestone.chapter_id)
+    )
     milestone.status = (
         MilestoneStatus.VERIFIED
         if review.decision == "verified"
@@ -150,6 +161,14 @@ async def review_submission(
         if next_milestone is not None:
             next_milestone.status = MilestoneStatus.IN_PROGRESS
     await db.flush()
+    background_tasks.add_task(
+        dispatch_review_notification,
+        student_user.email,
+        f"{student_profile.first_name} {student_profile.last_name}",
+        chapter_title or "Academic milestone",
+        review.decision,
+        review.feedback.strip() or None,
+    )
     return {"id": milestone.id, "status": milestone.status.value}
 
 
@@ -182,6 +201,7 @@ async def list_pending_activities(
 async def review_activity(
     activity_id: int,
     review: ActivityReview,
+    background_tasks: BackgroundTasks,
     user: User = Depends(staff_only),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
@@ -200,9 +220,23 @@ async def review_activity(
         raise HTTPException(
             status_code=409, detail="This activity is no longer awaiting review."
         )
+    recipient = await db.execute(
+        select(StudentProfile, User)
+        .join(User, StudentProfile.user_id == User.id)
+        .where(StudentProfile.id == activity.student_id)
+    )
+    student_profile, student_user = recipient.one()
     activity.status = ActivityStatus(review.decision)
     activity.review_feedback = review.feedback.strip() or None
     activity.reviewer_id = user.id
     activity.reviewed_at = datetime.now(UTC).replace(tzinfo=None)
     await db.flush()
+    background_tasks.add_task(
+        dispatch_review_notification,
+        student_user.email,
+        f"{student_profile.first_name} {student_profile.last_name}",
+        activity.title,
+        review.decision,
+        review.feedback.strip() or None,
+    )
     return {"id": activity.id, "status": activity.status.value}

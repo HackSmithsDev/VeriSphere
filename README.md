@@ -127,9 +127,20 @@ LinkedIn credentials are optional and should stay blank until an approved Linked
 
 The backend loads `backend/.env` first and then the repository root `.env`, without overriding values already in the process environment. Keep API-specific settings in `backend/.env`; the root file is for Compose interpolation.
 
-### `frontend/.env`
+### Frontend Vite environment files
 
-Copy `frontend/.env.example` to `frontend/.env` for local frontend configuration. `VITE_API_URL` defaults to `/api/v1`; use the documented local API URL only when bypassing the Vite proxy. `VITE_*` values are embedded in the browser bundle and must never contain secrets. The production frontend uses Nginx's same-origin `/api/` proxy.
+Copy `frontend/.env.example` to `frontend/.env` for shared, non-secret frontend defaults. Vite uses mode-specific files when running a development server (`development`) or creating a production build (`production`). For a local backend override, use `frontend/.env.development.local`:
+
+```dotenv
+VITE_API_URL=http://127.0.0.1:8088/api/v1
+VITE_APP_NAME=VeriSphere
+```
+
+This development-only file overrides `VITE_API_URL` from `frontend/.env` when running `npm run dev`. Do not name it `.env.local` if you want the local API override to apply only to development: `.env.local` is loaded for production builds too. Vite's precedence is: variables already present in the shell, `.env.[mode].local`, `.env.[mode]`, `.env.local`, then `.env`. Restart the Vite server after editing environment files.
+
+For local development, you can instead set `VITE_API_URL=/api/v1`; Vite then proxies API requests to `127.0.0.1:8088` as configured in `vite.config.js`. The default `.env.example` uses this same-origin proxy path.
+
+Production bundles use the production-mode/shared setting from `frontend/.env` unless overridden at build time. The Docker image excludes local `.env*` files and defaults to `/api/v1`; Nginx forwards that path to the backend. For a production frontend built separately and hosted on a different API domain, set HTTPS `VITE_API_URL` at build time and configure backend CORS accordingly. Every `VITE_*` variable is embedded in browser code and must never contain secrets.
 
 ## Run with Docker Compose
 
